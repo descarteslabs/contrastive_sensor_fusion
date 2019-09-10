@@ -1,1 +1,5 @@
 tensorflow-gpu==2.0.0rc0
+absl-py
+
+# Workaround for https://github.com/tensorflow/tensorflow/issues/32319
+gast==0.2.2
