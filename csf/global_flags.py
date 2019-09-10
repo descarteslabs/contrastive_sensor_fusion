@@ -18,6 +18,9 @@ flags.DEFINE_string(
     None,
     "Address of the TPU to train with. Leave unspecified to train with other hardware.",
 )
+flags.DEFINE_integer(
+    "random_seed", 1337, "Random seed used for all training and experiments."
+)
 
 
 def n_bands():

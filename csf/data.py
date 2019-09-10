@@ -9,29 +9,29 @@ from absl import flags
 FLAGS = flags.FLAGS
 
 flags.DEFINE_integer(
-    "unsupervised_batch_size",
-    None,
-    "Batch size to use for unsupervised training.",
-    lower_bound=2,
+    "batch_size", None, "Batch size to use for unsupervised training.", lower_bound=2
 )
 flags.DEFINE_integer(
-    "unsupervised_data_tilesize",
+    "data_tilesize",
     None,
     "Tilesize of data used for unsupervised learning.",
     lower_bound=1,
 )
 flags.DEFINE_string(
-    "unsupervised_data_feature_name",
+    "data_feature_name",
     None,
     "Name of the key in the key-value dictionary containing unsupervised examples.",
 )
-flags.mark_flags_as_required(
-    [
-        "unsupervised_batch_size",
-        "unsupervised_data_tilesize",
-        "unsupervised_data_feature_name",
-    ]
+flags.mark_flags_as_required(["batch_size", "data_tilesize", "data_feature_name"])
+
+# Exactly one of these must be defined
+flags.DEFINE_string(
+    "data_file", None, "Path to a tfrecord to use as unsupervised data."
 )
+flags.DEFINE_string(
+    "data_listing", None, "Path to a newline-separated file specifying tfrecord paths."
+)
+flags.mark_flags_as_mutual_exclusive(["data_file", "data_listing"], required=True)
 
 
 # Optional flags to configure dataset loading
@@ -46,23 +46,13 @@ flags.DEFINE_integer(
 )
 
 
-def load_dataset(data_file=None, data_listing=None):
+def load_dataset():
     """
     Get the dataset used for unsupervised learning.
 
     The dataset consists of examples, which are tensors of input imagery concatenated,
     serialized together into a byte string, and then saved as tf Examples with a single
-    key (see: unsupervised_data_feature_name).
-
-    Parameters
-    ----------
-    data_file : None, str, or [str], optional
-        If str, path to a tfrecord to use as the unsupervised data.
-        If [str], a list of such paths.
-        If None, `data_listing` must be specified and is used instead.
-    data_listing : None or str, optional
-        If str, path to a newline-separated file specifying tfrecord paths.
-        If None, `data_file` must be specified and is used instead.
+    key (see: data_feature_name).
 
     Returns
     -------
@@ -70,23 +60,14 @@ def load_dataset(data_file=None, data_listing=None):
         A dataset of batched examples, where each example is a set of coterminous
         input bands.
     """
-    if (data_file is None and data_listing is None) or (
-        data_file is not None and data_listing is not None
-    ):
-        raise ValueError(
-            "Exactly one of `data_file` or `data_listing` must be specified"
-        )
-
     feature_spec = {
-        FLAGS.unsupervised_data_feature_name: tf.io.FixedLenFeature(
-            [], tf.dtypes.string
-        )
+        FLAGS.data_feature_name: tf.io.FixedLenFeature([], tf.dtypes.string)
     }
 
     batch_shape = (
-        FLAGS.unsupervised_batch_size,
-        FLAGS.unsupervised_data_tilesize,
-        FLAGS.unsupervised_data_tilesize,
+        FLAGS.batch_size,
+        FLAGS.data_tilesize,
+        FLAGS.data_tilesize,
         gf.n_bands(),
     )
 
@@ -98,9 +79,7 @@ def load_dataset(data_file=None, data_listing=None):
         )
 
     def preprocess_batch(batch):
-        batch = tf.io.parse_example(batch, feature_spec)[
-            FLAGS.unsupervised_data_feature_name
-        ]
+        batch = tf.io.parse_example(batch, feature_spec)[FLAGS.data_feature_name]
         batch = tf.io.decode_raw(batch, tf.dtypes.uint8)
         batch = tf.reshape(batch, batch_shape)
 
@@ -123,11 +102,11 @@ def load_dataset(data_file=None, data_listing=None):
         batch = (tf.cast(batch, tf.float32) - 128.0) / 128.0
         return batch
 
-    if data_file:  # Dataset specified as a single tfrecord or small list of tfrecords
-        ds = load_tfrecord(data_file).repeat()
+    if FLAGS.data_file:  # Dataset specified as a single tfrecord
+        ds = load_tfrecord(FLAGS.data_file).repeat()
     else:  # Dataset specified as a file listing tfrecords
         ds = (
-            tf.data.experimental.CsvDataset(data_listing, [tf.dtypes.string])
+            tf.data.experimental.CsvDataset(FLAGS.data_listing, [tf.dtypes.string])
             .repeat()
             .interleave(
                 load_tfrecord,
@@ -138,7 +117,7 @@ def load_dataset(data_file=None, data_listing=None):
 
     ds = (
         ds.shuffle(FLAGS.shuffle_buffer_size, reshuffle_each_iteration=True)
-        .batch(FLAGS.unsupervised_batch_size)
+        .batch(FLAGS.batch_size)
         .map(preprocess_batch, num_parallel_calls=tf.data.experimental.AUTOTUNE)
         .prefetch(tf.data.experimental.AUTOTUNE)
     )
