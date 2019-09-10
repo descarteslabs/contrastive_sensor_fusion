@@ -8,7 +8,7 @@ from absl import flags, logging
 import csf.data
 import csf.global_flags as gf
 import csf.utils
-from csf.encoder import RESNET_REPRESENTATION_LAYERS
+from csf.encoder import RESNET_REPRESENTATION_LAYERS, resnet_encoder
 
 FLAGS = flags.FLAGS
 
@@ -197,7 +197,6 @@ def _create_view(scene, step):
 
 
 def _contrastive_loss(representation_1, representation_2):
-    # TODO(Aidan): ensure summaries work with TPU training
     with tf.name_scope("contrastive_loss"):
         representation_1 = tf.reshape(representation_1, (FLAGS.batch_size, -1))
         representation_2 = tf.reshape(representation_2, (FLAGS.batch_size, -1))
@@ -259,19 +258,103 @@ def _contrastive_loss(representation_1, representation_2):
         tf.summary.scalar(
             "batch_accuracy",
             batch_accuracy,
-            descritpion="Fraction of scenes in the batch matched correctly.",
+            description="Fraction of scenes in the batch matched correctly.",
         )
 
     return nce_loss_total
 
 
-def train_unsupervised():
-    # TODO(Aidan): training
-    # TODO(Aidan): TPU integration
-    # TODO(Aidan): summaries
-    # TODO(Aidan): step variable
-    # TODO(Aidan): metrics
-    # TODO(Aidan): checkpoints
-    # TODO(Aidan): logging
+# TODO(Aidan): re-enable autograph conversion
+#  @tf.function
+def _train_step(batch, encoder, optimizer, step):
+    """
+    Perform the gradient computation and application for a single batch of training.
 
-    pass
+    Parameters
+    ----------
+    batch : tf.Tensor
+        A batch of input imagery.
+    encoder : tf.keras.Model
+        A ResNet-style encoder producing representations at various layers.
+    optimizer : tf.optimizers.Optimizer
+        The optimizer used for training.
+    step : int or tf.Tensor
+        Which step of training this is.
+
+    Returns
+    -------
+    tf.Tensor
+        The loss for this step.
+    """
+    view_1 = _create_view(batch, step)
+    view_2 = _create_view(batch, step)
+    layers_and_weights = layer_loss_weights().items()
+    losses = []
+
+    with tf.GradientTape() as tape:
+        representations_1 = encoder(view_1)
+        representations_2 = encoder(view_2)
+
+        for layer, weight in layers_and_weights:
+            with tf.name_scope("layer_{}".format(layer)):
+                loss = _contrastive_loss(
+                    representations_1[layer], representations_2[layer]
+                )
+                losses.append(weight * loss)
+
+        loss_total = tf.reduce_sum(losses, name="loss_total")
+
+    tf.summary.scalar(
+        "loss_total", loss_total, description="Total loss for all layers."
+    )
+
+    gradients = tape.gradient(loss_total, encoder.trainable_weights)
+    optimizer.apply_gradients(zip(gradients, encoder.trainable_weights))
+
+    return loss_total
+
+
+def train_unsupervised():
+    # TODO(Aidan): TPU integration
+    # TODO(Aidan): checkpoint saving and restoring
+    # TODO(Aidan): implement summary frequency
+
+    logging.info(
+        "Starting unsupervised training with flags:\n{}".format(
+            FLAGS.flags_into_string()
+        )
+    )
+
+    logging.debug("Building global objects.")
+    summary_writer = tf.summary.create_file_writer(FLAGS.out_dir)
+    # TODO(Aidan): determine if this is necessary
+    #  tf.summary.record_if(not gf.using_tpu())
+
+    step = tf.Variable(
+        0,
+        trainable=False,
+        name="step",
+        dtype=tf.dtypes.int32,
+        aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA,
+    )
+    tf.summary.experimental.set_step(step)
+    learning_rate = _learning_rate(step)
+
+    logging.debug("Loading dataset.")
+    ds = csf.data.load_dataset()
+
+    logging.debug("Building model and optimizer.")
+    encoder = resnet_encoder(input_shape()[1:])
+    optimizer = tf.optimizers.Adam(learning_rate, clipnorm=1.0)
+    # TODO(Aidan): parameterize optimizers and kwargs
+
+    logging.info("Beginning unsupervised training.")
+    with summary_writer.as_default():
+        tf.summary.scalar("learning_rate", learning_rate, description="Learning rate.")
+        for batch in enumerate(ds):
+            _train_step(batch, encoder, optimizer, step)
+
+            if step.assign_add(1) >= FLAGS.train_batches:
+                break
+
+    logging.info("Done with unsupervised training.")
