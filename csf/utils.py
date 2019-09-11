@@ -85,3 +85,40 @@ def make_legal_image_summary(tensor):
     if n_channels > 3:
         return tensor[:, :, :, :3]
     return tf.pad(tensor, ((0, 0), (0, 0), (0, 0), (0, 3 - n_channels)))
+
+
+def partition_imagery(concatenated_imagery, image_bands, partition_bands):
+    """
+    Extract, by name, a list of bands from a tensor of concatenated imagery.
+    Results are returned as a list of named 3-band images for visualization.
+
+    Parameters
+    ----------
+    concatenated_imagery : tf.Tensor
+        A rank-4 tensor. The first dimension is treated as a batch dimension, and the
+        last dimension is treated as channels.
+    image_bands : [string]
+        Names of the bands in the input tensor. Must have length equal to the size of
+        the last axis of `concatenated_imagery`.
+    partition_bands : [string]
+        Names of bands to extract. Length must be divisible by 3.
+
+    Returns
+    -------
+    [string], [tf.Tensor]
+        Strings are names for the resuting tensors, and tensors are 3-channel images,
+        one for every 3 bands in `partition_bands`.
+    """
+
+    def extract_group(bands):
+        indices = [image_bands.index(band) for band in bands]
+        return tf.gather(concatenated_imagery, indices, axis=-1)
+
+    n_groups = len(partition_bands) // 3
+    groups = []
+    for i in range(n_groups):
+        bands = partition_bands[3 * i : 3 * (i + 1)]
+        imagery = extract_group(bands)
+        groups.append((",".join(bands), imagery))
+
+    return list(zip(*groups))
