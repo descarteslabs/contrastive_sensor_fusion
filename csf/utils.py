@@ -2,6 +2,8 @@
 Various utilities used project-wide.
 """
 
+from contextlib import contextmanager
+
 import tensorflow as tf
 
 
@@ -122,3 +124,9 @@ def partition_imagery(concatenated_imagery, image_bands, partition_bands):
         groups.append((",".join(bands), imagery))
 
     return list(zip(*groups))
+
+
+@contextmanager
+def dummy_context():
+    """A context manager that does nothing."""
+    yield None
