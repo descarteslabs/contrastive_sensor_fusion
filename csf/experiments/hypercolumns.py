@@ -1,13 +1,13 @@
 import subprocess as sp
 import tensorflow as tf
-from tensorflow.keras.layers import Concatenate, Conv2D, Input, Lambda, UpSampling2D
+from tensorflow.keras.layers import Activation, Add, Concatenate, Conv2D, Input, Lambda, UpSampling2D
 from tensorflow.keras import Model
 import tensorflow.keras.backend as K
 
 from csf.encoder import resnet_encoder
 
 
-def hypercolumn_model(size, products=None, batchsize=8):
+def hypercolumn_model(size, products=None, batchsize=8, checkpoint_dir=None):
     """Create a model based on the trained encoder (see encoder.py)
     for semantic segmentation. Can operate on any subset of products. """
 
@@ -16,6 +16,10 @@ def hypercolumn_model(size, products=None, batchsize=8):
         products = default_products
 
     encoder = resnet_encoder((size, size, 12))
+    if checkpoint_dir is not None:
+        weights_path = tf.train.latest_checkpoint(checkpoint_dir)
+        checkpoint = tf.train.Checkpoint(encoder=encoder)
+        checkpoint.restore(weights_path).expect_partial()
     encoder.trainable = False
 
     model_inputs = list()
@@ -40,21 +44,29 @@ def hypercolumn_model(size, products=None, batchsize=8):
     stack3 = encoded['conv4_block5_out']
     stack4 = encoded['conv5_block3_out']
 
-    conv0 = Conv2D(filters=8, kernel_size=1)(encoder_input)
-    conv1 = Conv2D(filters=16, kernel_size=1)(stack1)
-    conv2 = Conv2D(filters=32, kernel_size=1)(stack2)
-    conv3 = Conv2D(filters=64, kernel_size=1)(stack3)
-    conv4 = Conv2D(filters=128, kernel_size=1)(stack4)
+    conv0 = Conv2D(
+        filters=1,
+        kernel_size=1,
+        bias_initializer='zeros',
+        kernel_initializer='VarianceScaling'
+    )(encoder_input)
 
     up0 = conv0
-    up1 = UpSampling2D(size=(128 // 32), interpolation='bilinear')(conv1)
-    up2 = UpSampling2D(size=(128 // 16), interpolation='bilinear')(conv2)
-    up3 = UpSampling2D(size=(128 // 8), interpolation='bilinear')(conv3)
-    up4 = UpSampling2D(size=(128 // 4), interpolation='bilinear')(conv4)
+    up1 = UpSampling2D(size=(128 // 32), interpolation='bilinear')(stack1)
+    up2 = UpSampling2D(size=(128 // 16), interpolation='bilinear')(stack2)
+    up3 = UpSampling2D(size=(128 // 8), interpolation='bilinear')(stack3)
+    up4 = UpSampling2D(size=(128 // 4), interpolation='bilinear')(stack4)
 
     cat = Concatenate(axis=-1)([up0, up1, up2, up3, up4])
     out = Conv2D(filters=1, kernel_size=1, activation='sigmoid')(cat)
     return Model(inputs=model_inputs, outputs=[out])
+
+
+def dice_loss(y_true, y_pred, smooth=1.0):
+    intersection = K.sum(K.abs(y_true * y_pred), axis=-1)
+    return 1.0 - (2. * intersection + smooth) / (
+        K.sum(K.square(y_true), axis=-1) + K.sum(K.square(y_pred), axis=-1) + smooth
+    )
 
 
 def get_dataset(remote_prefix):
@@ -87,13 +99,25 @@ def get_dataset(remote_prefix):
 
 
 if __name__ == '__main__':
-    batchsize = 8
-    model = hypercolumn_model(size=128, products=('NAIP',), batchsize=batchsize)
+    batchsize = 16
+
+    checkpoint_dir = '***REMOVED***outputs/basenets_fusion_test_tf2/'
+    model = hypercolumn_model(
+        size=128,
+        products=('NAIP',),
+        batchsize=batchsize,
+        checkpoint_dir=checkpoint_dir
+    )
 
     model.compile(
-        optimizer=tf.keras.optimizers.Ftrl(),
-        loss=tf.keras.losses.BinaryCrossentropy(),
-        metrics=[tf.keras.metrics.MeanIoU(num_classes=2)]
+        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
+        loss=dice_loss,
+        metrics=[
+            tf.keras.metrics.MeanIoU(num_classes=2),
+            tf.keras.metrics.Precision(),
+            tf.keras.metrics.Recall(),
+            tf.keras.metrics.BinaryAccuracy()
+        ]
     )
 
     # Provides 4-band NAIP images and targets:
@@ -105,5 +129,6 @@ if __name__ == '__main__':
     eval_dataset = eval_dataset.batch(batchsize)
     test_dataset = test_dataset.batch(batchsize)
 
-    model.fit(train_dataset, epochs=4)
+    model.fit(train_dataset, epochs=64, steps_per_epoch=8192 // batchsize,
+        validation_data=eval_dataset, validation_steps=4)
     model.evaluate(test_dataset)
