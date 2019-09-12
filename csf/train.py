@@ -1,9 +1,13 @@
 """
 Code for training models unsupervised using contrastive sensor fusion.
+
+Some components based on https://github.com/tensorflow/models/tree/master/official/bert.
 """
 
+import sys
+
 import tensorflow as tf
-from absl import flags, logging
+from absl import app, flags, logging
 
 import csf.data
 import csf.global_flags as gf
@@ -85,14 +89,10 @@ flags.DEFINE_string(
     "If unspecified, initialize model weights randomly.",
 )
 flags.DEFINE_integer(
-    "summary_frequency",
+    "callback_frequency",
     100,
-    "How many batches to wait between saving summaries. If 0, do not save summaries. "
-    "Note that summary steps require additional CPU-accelerator communication and may "
-    "slow down training if used too often.",
-)
-flags.DEFINE_integer(
-    "checkpoint_frequency", 500, "How many batches to wait between saving checkpoints."
+    "How many batches to train for between writing summaries and checkpoints, and "
+    "updating schedules.",
 )
 flags.DEFINE_integer("max_checkpoints", 100, "The maximum number of checkpoints kept.")
 flags.DEFINE_integer(
@@ -216,12 +216,10 @@ def _create_view(scene, step, dropout_rate, seed=None):
     return scene
 
 
-def _contrastive_loss(representation_1, representation_2, show_summaries=False):
+def _contrastive_loss(representation_1, representation_2):
     """
     Compute the contrastive loss for a pair of representations.
-    Note that this function is autograph-traced and takes a Python boolean input
-    (show_summaries), so two different graphs will be created.
-    Do not pass Python values to any other argument.
+    Do not pass Python values to any argument because of autograph.
 
     Parameters
     ----------
@@ -229,8 +227,6 @@ def _contrastive_loss(representation_1, representation_2, show_summaries=False):
         The representations for view 1 over this batch.
     representation_2 : tf.Tensor
         The representations for view 2 over this batch.
-    show_summaries : bool, optional
-        If True, plot summaries.
 
     Returns
     -------
@@ -248,27 +244,26 @@ def _contrastive_loss(representation_1, representation_2, show_summaries=False):
         flat_1, flat_2, transpose_b=True, name="similarities"
     )
 
-    with tf.name_scope("similarity_visualization"):
-        similarities_normalized = tf.expand_dims(
-            tf.expand_dims(similarities / tf.reduce_max(similarities), axis=0), axis=-1
-        )
-
     # Rescale similarities to apply softmax temperature
     similarities = tf.divide(
         similarities, FLAGS.softmax_temperature, name="sharpened_similarities"
     )
 
+    # NOTE: we use `reduce_sum` here and divide by the known batch size because
+    #       each replica gets a smaller effective batch size in distributed training.
     with tf.name_scope("forward"):  # Predict view 2 from view 1
         softmax = tf.nn.log_softmax(similarities, axis=1, name="log_probabilities")
         nce_loss_forward = tf.negative(
-            tf.reduce_mean(tf.linalg.diag_part(softmax)), name="nce_loss_forward"
+            tf.reduce_sum(tf.linalg.diag_part(softmax)) / FLAGS.batch_size,
+            name="nce_loss_forward",
         )
         del softmax
 
     with tf.name_scope("backward"):  # Predict view 1 from view 2
         softmax = tf.nn.log_softmax(similarities, axis=0, name="log_probabilities")
         nce_loss_backward = tf.negative(
-            tf.reduce_mean(tf.linalg.diag_part(softmax)), name="nce_loss_backward"
+            tf.reduce_sum(tf.linalg.diag_part(softmax)) / FLAGS.batch_size,
+            name="nce_loss_backward",
         )
         del softmax
 
@@ -286,34 +281,37 @@ def _contrastive_loss(representation_1, representation_2, show_summaries=False):
         )
         batch_accuracy = tf.reduce_mean(correct_predictions)
 
-    if show_summaries:
-        tf.summary.histogram(
-            "representation_histogram",
-            flat_1,
-            description="Histogram of representations of view 1.",
-        )
-        tf.summary.histogram(
-            "similarities_histogram",
-            similarities,
-            description="Histogram of similarities between views for each pair of "
-            "scenes in the batch.",
-        )
-
-        # NOTE: Workaround for https://github.com/tensorflow/tensorflow/issues/28007
-        #       Remove the device scope as soon as that issue's fixed.
-        with tf.device("cpu:0"):
-            tf.summary.image(
-                "similarities_matrix",
-                similarities_normalized,
-                description="Matrix of similarities between views for each pair of "
-                "scenes in the batch.",
-            )
+        # NOTE: Currently disabled because of
+        #       https://github.com/tensorflow/tensorflow/issues/28007.
+        #       Reenable once that's fixed.
+        #  with tf.device("cpu:0"):
+        #      similarities_normalized = tf.expand_dims(
+        #           tf.expand_dims(similarities / tf.reduce_max(similarities), axis=0),
+        #           axis=-1
+        #      )
+        #      tf.summary.image(
+        #          "similarities_matrix",
+        #          similarities_normalized,
+        #          description="Matrix of similarities between views for each pair of "
+        #          "scenes in the batch.",
+        #      )
+        #      tf.summary.histogram(
+        #          "representation_histogram",
+        #          flat_1,
+        #          description="Histogram of representations of view 1.",
+        #      )
+        #      tf.summary.histogram(
+        #          "similarities_histogram",
+        #          similarities,
+        #          description="Histogram of similarities between views for each pair "
+        #          "of scenes in the batch.",
+        #      )
 
     return nce_loss_total, batch_accuracy
 
 
 def _visualize_batch(batch):
-    if FLAGS.visualize_bands:
+    if FLAGS.visualize_bands and not FLAGS.run_distributed:
         # NOTE: Workaround for https://github.com/tensorflow/tensorflow/issues/28007
         #       Remove the device scope as soon as that issue's fixed.
         with tf.device("cpu:0"):
@@ -324,203 +322,236 @@ def _visualize_batch(batch):
                 tf.summary.image(name, triple)
 
 
-# TODO(Aidan): TPU integration
-# TODO(Aidan): Solve gcloud permissions issue
-def train_unsupervised():
+# TODO(Aidan): fix checkpoints
+def _run_unsupervised_training(dataset, distribution_strategy):
+    """
+    Perform a full unsupervised training run programmatically.
+
+    Parameters
+    ----------
+    dataset : tf.data.Dataset
+        The dataset to train on.
+    distribution_strategy : None or tf.distribute.Strategy
+        The distribution strategy to use.
+    """
     logging.info(
         "Starting unsupervised training with flags:\n{}".format(
             FLAGS.flags_into_string()
         )
     )
 
-    tf.random.set_seed(FLAGS.random_seed)
+    distribution_scope = (
+        distribution_strategy.scope
+        if FLAGS.run_distributed
+        else csf.utils.dummy_context
+    )
 
     logging.debug("Building global objects.")
-    summary_writer = tf.summary.create_file_writer(FLAGS.out_dir)
+    with distribution_scope():
+        tf.random.set_seed(FLAGS.random_seed)
+        summary_writer = tf.summary.create_file_writer(FLAGS.out_dir)
 
-    # Precomputed and kept static for use in tf.function
-    layers_and_weights = layer_loss_weights().items()
+        # Precomputed and kept static for use in tf.function
+        layers_and_weights = layer_loss_weights().items()
 
-    # List of (loss, accuracy) metric pairs
-    if FLAGS.summary_frequency:
+        # List of (loss, accuracy) metric pairs
         total_loss_metric = tf.metrics.Mean()
         layer_metrics = [
             (tf.metrics.Mean(), tf.metrics.Mean()) for _ in layers_and_weights
         ]
 
-    def write_metrics():
-        tf.summary.scalar(
-            "loss",
-            total_loss_metric.result(),
-            description="The total batch contrastive loss, averaged over the last "
-            "`summary_frequency` batches.",
+        step = tf.Variable(
+            0,
+            trainable=False,
+            name="step",
+            dtype=tf.dtypes.int64,
+            aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA,
         )
-        total_loss_metric.reset_states()
+        tf.summary.experimental.set_step(step)
 
-        for (loss_metric, accuracy_metric), (name, _) in zip(
-            layer_metrics, layers_and_weights
-        ):
-            with tf.name_scope(name):
-                tf.summary.scalar(
-                    "loss",
-                    loss_metric.result(),
-                    description="The batch contrastive loss at layer {}, averaged over"
-                    "the last `summary_frequency` batches.".format(name),
-                )
-                tf.summary.scalar(
-                    "accuracy",
-                    accuracy_metric.result(),
-                    description="The batch contrastive accuracy at layer {}, averaged "
-                    "over the last `summary_frequency` batches.".format(name),
-                )
-                loss_metric.reset_states()
-                accuracy_metric.reset_states()
+        learning_rate = tf.Variable(
+            _learning_rate(step),
+            trainable=False,
+            name="learning_rate",
+            dtype=tf.dtypes.float32,
+            aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA,
+        )
 
-    step = tf.Variable(
-        -1,
-        trainable=False,
-        name="step",
-        dtype=tf.dtypes.int64,
-        aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA,
-    )
-    tf.summary.experimental.set_step(step)
+        dropout_rate = tf.Variable(
+            _dropout_rate(step),
+            trainable=False,
+            name="dropout_rate",
+            dtype=tf.dtypes.float32,
+            aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA,
+        )
 
-    learning_rate = tf.Variable(
-        _learning_rate(step),
-        trainable=False,
-        name="learning_rate",
-        dtype=tf.dtypes.float32,
-        aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA,
-    )
+        logging.debug("Building model and optimizer.")
+        encoder = resnet_encoder(gf.n_bands())
+        optimizer = tf.optimizers.Adam(learning_rate, clipnorm=FLAGS.gradient_clipnorm)
 
-    dropout_rate = tf.Variable(
-        _dropout_rate(step),
-        trainable=False,
-        name="dropout_rate",
-        dtype=tf.dtypes.float32,
-        aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA,
-    )
+        ckpt = tf.train.Checkpoint(
+            step=step,
+            encoder=encoder,
+            optimizer=optimizer,
+            learning_rate=learning_rate,
+            dropout_rate=dropout_rate,
+        )
+        ckpt_manager = tf.train.CheckpointManager(
+            ckpt,
+            FLAGS.out_dir,
+            FLAGS.max_checkpoints,
+            FLAGS.keep_checkpoint_every_n_hours,
+        )
+        last_ckpt = ckpt_manager.latest_checkpoint
 
-    logging.debug("Building model and optimizer.")
-    encoder = resnet_encoder(gf.n_bands())
-    optimizer = tf.optimizers.Adam(learning_rate, clipnorm=FLAGS.gradient_clipnorm)
+        if last_ckpt is not None:
+            logging.info("Continuing training from checkpoint: {}".format(last_ckpt))
+            ckpt.restore(last_ckpt)
+        else:
+            logging.info("Initializing encoder with random weights.")
 
-    ckpt = tf.train.Checkpoint(
-        step=step,
-        encoder=encoder,
-        optimizer=optimizer,
-        learning_rate=learning_rate,
-        dropout_rate=dropout_rate,
-    )
-    ckpt_manager = tf.train.CheckpointManager(
-        ckpt, FLAGS.out_dir, FLAGS.max_checkpoints, FLAGS.keep_checkpoint_every_n_hours
-    )
-    last_ckpt = ckpt_manager.latest_checkpoint
+        def write_metrics():
+            tf.summary.scalar(
+                "loss",
+                total_loss_metric.result(),
+                description="The total batch contrastive loss, averaged over the last "
+                "`callback_frequency` batches.",
+            )
+            total_loss_metric.reset_states()
 
-    if last_ckpt is not None:
-        logging.info("Continuing training from checkpoint: {}".format(last_ckpt))
-    else:
-        logging.info("Initializing encoder with random weights.")
+            for (loss_metric, accuracy_metric), (name, _) in zip(
+                layer_metrics, layers_and_weights
+            ):
+                with tf.name_scope(name):
+                    tf.summary.scalar(
+                        "loss",
+                        loss_metric.result(),
+                        description="The batch contrastive loss at layer {}, averaged "
+                        "over the last `callback_frequency` batches.".format(name),
+                    )
+                    tf.summary.scalar(
+                        "accuracy",
+                        accuracy_metric.result(),
+                        description="The batch contrastive accuracy at layer {}, "
+                        "averaged over the last `callback_frequency` "
+                        "batches.".format(name),
+                    )
+                    loss_metric.reset_states()
+                    accuracy_metric.reset_states()
 
-    logging.debug("Loading dataset.")
-    ds = csf.data.load_dataset()
+        def _replicated_training_step(batch, dropout_rate):
+            """Training step run on a single replica. Do not call directly."""
+            with tf.name_scope("training_step"):
+                with tf.name_scope("view_1"):
+                    view_1 = _create_view(batch, step, dropout_rate, seed=1)
+                with tf.name_scope("view_2"):
+                    view_2 = _create_view(batch, step, dropout_rate, seed=2)
 
-    # NOTE: Autograph will create two graphs for `train_step`, one with
-    #       `show_summaries=True` and one with `show_summaries=False`.
-    #       Do not pass Python values to any other argument.
-    @tf.function
-    def train_step(batch, dropout_rate, show_summaries=False):
-        with tf.name_scope("training_step"):
-            with tf.name_scope("view_1"):
-                view_1 = _create_view(batch, step, dropout_rate, seed=1)
-                _visualize_batch(view_1)
-            with tf.name_scope("view_2"):
-                view_2 = _create_view(batch, step, dropout_rate, seed=2)
-                _visualize_batch(view_2)
+                losses = []
 
-            losses = []
+                with tf.GradientTape() as tape:
+                    representations_1 = encoder(view_1)
+                    representations_2 = encoder(view_2)
 
-            with tf.GradientTape() as tape:
-                representations_1 = encoder(view_1)
-                representations_2 = encoder(view_2)
+                    for (loss_metric, accuracy_metric), (layer, weight) in zip(
+                        layer_metrics, layers_and_weights
+                    ):
+                        with tf.name_scope("layer_{}".format(layer)):
+                            loss, accuracy = _contrastive_loss(
+                                representations_1[layer], representations_2[layer]
+                            )
+                            losses.append(weight * loss)
 
-                for (loss_metric, accuracy_metric), (layer, weight) in zip(
-                    layer_metrics, layers_and_weights
-                ):
-                    with tf.name_scope("layer_{}".format(layer)):
-                        loss, accuracy = _contrastive_loss(
-                            representations_1[layer],
-                            representations_2[layer],
-                            show_summaries,
-                        )
-                        losses.append(weight * loss)
-
-                        if FLAGS.summary_frequency:
                             loss_metric.update_state([loss])
                             accuracy_metric.update_state([accuracy])
 
-                loss_total = tf.reduce_sum(losses, name="loss_total")
-                if FLAGS.summary_frequency:
+                    loss_total = tf.reduce_sum(losses, name="loss_total")
                     total_loss_metric.update_state([loss_total])
 
-            gradients = tape.gradient(loss_total, encoder.trainable_weights)
-            optimizer.apply_gradients(zip(gradients, encoder.trainable_weights))
+                gradients = tape.gradient(loss_total, encoder.trainable_weights)
+                optimizer.apply_gradients(zip(gradients, encoder.trainable_weights))
 
-            return loss_total
+        @tf.function
+        def train_steps(batch, dropout_rate):
+            if FLAGS.run_distributed:
+                for _ in tf.range(FLAGS.callback_frequency):
+                    distribution_strategy.experimental_run_v2(
+                        _replicated_training_step, args=(batch, dropout_rate)
+                    )
+            else:
+                for _ in tf.range(FLAGS.callback_frequency):
+                    _replicated_training_step(batch, dropout_rate)
 
-    logging.info("Beginning unsupervised training.")
+        logging.info("Beginning unsupervised training.")
+        for batch in dataset:
+            current_step = int(step.assign_add(FLAGS.callback_frequency))
 
-    for batch in ds:
-        current_step = int(step.assign_add(1))
+            with summary_writer.as_default():
+                with tf.name_scope("input_imagery"):
+                    _visualize_batch(batch)
 
-        # TODO(Aidan): determine if summaries must be disabled when using TPUs
-        show_summaries = (
-            FLAGS.summary_frequency and current_step % FLAGS.summary_frequency == 0
-        )
-        with summary_writer.as_default(), tf.summary.record_if(show_summaries):
-            with tf.name_scope("input_imagery"):
-                _visualize_batch(batch)
+                # Update schedules
+                if FLAGS.learning_rate_warmup_batches:
+                    learning_rate.assign(_learning_rate(step))
+                    tf.summary.scalar("learning_rate", learning_rate)
+                if FLAGS.band_dropout_rate_warmup_batches:
+                    dropout_rate.assign(_dropout_rate(step))
+                    tf.summary.scalar("dropout_rate", dropout_rate)
 
-            # Update schedules
-            if FLAGS.learning_rate_warmup_batches:
-                learning_rate.assign(_learning_rate(step))
-                tf.summary.scalar("learning_rate", learning_rate)
-            if FLAGS.band_dropout_rate_warmup_batches:
-                dropout_rate.assign(_dropout_rate(step))
-                tf.summary.scalar("dropout_rate", dropout_rate)
+                if current_step == FLAGS.callback_frequency:
+                    logging.debug("Running trace for first batch.")
+                    tf.summary.trace_on()
 
-            if current_step == 0:
-                logging.debug("Running trace for first batch.")
-                tf.summary.trace_on()
+                train_steps(batch, dropout_rate)
 
-            train_step(batch, dropout_rate, show_summaries)
+                if current_step == FLAGS.callback_frequency:
+                    tf.summary.trace_export("training_step", step=0)
+                    tf.summary.trace_off()
+                    summary_writer.flush()
 
-            if current_step == 0:
-                tf.summary.trace_export("training_step", step=0)
-                tf.summary.trace_off()
-                summary_writer.flush()
-
-            if current_step % FLAGS.checkpoint_frequency == 0:
                 save_path = ckpt_manager.save()
                 logging.info(
                     "Saving checkpoints for step {}: {}".format(current_step, save_path)
                 )
-
-            # Flush metrics every `summary_frequency` batches
-            if show_summaries:
                 write_metrics()
 
-            if current_step >= FLAGS.train_batches:
-                logging.info("Finished training at step {}.".format(current_step))
-                break
+                if current_step >= FLAGS.train_batches:
+                    logging.info("Finished training at step {}.".format(current_step))
+                    break
 
-    logging.info("Done with unsupervised training.")
-    ckpt_manager.save()
+        logging.info("Done with unsupervised training.")
+        ckpt_manager.save()
 
 
-# TODO(Aidan): move this to a separate script
-if __name__ == "__main__":
-    import sys
-
+def main(_):
     FLAGS(sys.argv)
-    train_unsupervised()
+
+    logging.debug("Loading dataset.")
+    dataset = csf.data.load_dataset()
+
+    if gf.using_tpu():
+        logging.info("Setting up TPU: {}.".format(FLAGS.tpu))
+        cluster_resolver = tf.distribute.cluster_resolver.TPUClusterResolver(
+            tpu=FLAGS.tpu
+        )
+        tf.config.experimental_connect_to_host(
+            cluster_resolver.master(), job_name="unsupervised_training"
+        )
+        tf.tpu.experimental.initialize_tpu_system(cluster_resolver)
+        distribution_strategy = tf.distribute.experimental.TPUStrategy(cluster_resolver)
+        dataset = distribution_strategy.experimental_distribute_dataset(dataset)
+        FLAGS.run_distributed = True
+        logging.info("Done setting up TPU cluster.")
+    elif FLAGS.run_distributed:
+        logging.info("Training with a mirrored distribution strategy.")
+        distribution_strategy = tf.distribute.MirroredStrategy()
+        dataset = distribution_strategy.experimental_distribute_dataset(dataset)
+    else:
+        logging.info("Training on a single device.")
+        distribution_strategy = None
+
+    _run_unsupervised_training(dataset, distribution_strategy)
+
+
+if __name__ == "__main__":
+    app.run(main)

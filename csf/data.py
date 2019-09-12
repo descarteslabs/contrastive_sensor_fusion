@@ -118,7 +118,11 @@ def load_dataset():
         )
 
     ds = (
-        ds.shuffle(FLAGS.shuffle_buffer_size, reshuffle_each_iteration=True)
+        ds.shuffle(
+            FLAGS.shuffle_buffer_size,
+            reshuffle_each_iteration=True,
+            seed=FLAGS.random_seed,
+        )
         .batch(FLAGS.batch_size)
         .map(preprocess_batch, num_parallel_calls=tf.data.experimental.AUTOTUNE)
         .prefetch(tf.data.experimental.AUTOTUNE)
