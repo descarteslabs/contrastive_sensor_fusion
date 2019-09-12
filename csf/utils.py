@@ -5,6 +5,11 @@ Various utilities used project-wide.
 from contextlib import contextmanager
 
 import tensorflow as tf
+from absl import flags
+
+import csf.global_flags  # noqa
+
+FLAGS = flags.FLAGS
 
 
 def linear_interpolate(step, initial_value, final_value, start_step, end_step):
@@ -89,7 +94,7 @@ def make_legal_image_summary(tensor):
     return tf.pad(tensor, ((0, 0), (0, 0), (0, 0), (0, 3 - n_channels)))
 
 
-def partition_imagery(concatenated_imagery, image_bands, partition_bands):
+def partition_imagery(concatenated_imagery, partition_bands):
     """
     Extract, by name, a list of bands from a tensor of concatenated imagery.
     Results are returned as a list of named 3-band images for visualization.
@@ -99,9 +104,6 @@ def partition_imagery(concatenated_imagery, image_bands, partition_bands):
     concatenated_imagery : tf.Tensor
         A rank-4 tensor. The first dimension is treated as a batch dimension, and the
         last dimension is treated as channels.
-    image_bands : [string]
-        Names of the bands in the input tensor. Must have length equal to the size of
-        the last axis of `concatenated_imagery`.
     partition_bands : [string]
         Names of bands to extract. Length must be divisible by 3.
 
@@ -113,7 +115,7 @@ def partition_imagery(concatenated_imagery, image_bands, partition_bands):
     """
 
     def extract_group(bands):
-        indices = [image_bands.index(band) for band in bands]
+        indices = [FLAGS.bands.index(band) for band in bands]
         return tf.gather(concatenated_imagery, indices, axis=-1)
 
     n_groups = len(partition_bands) // 3
@@ -124,6 +126,30 @@ def partition_imagery(concatenated_imagery, image_bands, partition_bands):
         groups.append((",".join(bands), imagery))
 
     return list(zip(*groups))
+
+
+def visualize_batch(batch, visualize_bands, max_outputs=3):
+    """
+    Create an image summary of one batch of input imagery.
+
+    Parameters
+    ----------
+    batch : tf.Tensor
+        A rank-4 tensor of imagery with last dimension holding imagery in the order of
+        FLAGS.bands.
+    visualize_bands : [string]
+        List of bands to visualize. Should be grouped into blocks of 3, which are
+        shown together.
+    max_outputs : int
+        Maximum number of images to show at a single step.
+    """
+    if visualize_bands and not FLAGS.run_distributed:
+        # NOTE: Workaround for https://github.com/tensorflow/tensorflow/issues/28007
+        #       Remove the device scope as soon as that issue's fixed.
+        with tf.device("cpu:0"):
+            names, triples = partition_imagery((batch / 2.0) + 0.5, visualize_bands)
+            for name, triple in zip(names, triples):
+                tf.summary.image(name, triple, max_outputs=max_outputs)
 
 
 @contextmanager
