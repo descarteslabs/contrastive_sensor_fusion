@@ -10,6 +10,7 @@ import tensorflow as tf
 from absl import app, flags, logging
 
 import csf.data
+import csf.distribution
 import csf.global_flags as gf
 import csf.utils
 from csf.encoder import RESNET_REPRESENTATION_LAYERS, resnet_encoder
@@ -79,9 +80,6 @@ flags.DEFINE_float(
 flags.DEFINE_string(
     "out_dir", None, "Path used to store the outputs of unsupervised training."
 )
-flags.DEFINE_integer(
-    "train_batches", None, "Number of batches of unsupervised training to carry out."
-)
 flags.DEFINE_string(
     "initial_checkpoint",
     None,
@@ -101,19 +99,12 @@ flags.DEFINE_integer(
     "Every `n` hours, marks a checkpoint to be kept permanently. "
     "If left unspecified, disables this behavior.",
 )
-flags.DEFINE_list(
-    "visualize_bands",
-    None,
-    "Bands to visualize during training. Should be grouped into sets of 3. "
-    "If left unspecified, do not visualize input imagery.",
-)
 flags.mark_flags_as_required(
     [
         "model_tilesize",
         "learning_rate",
         "band_dropout_rate",
         "layer_loss_weights",
-        "train_batches",
         "out_dir",
     ]
 )
@@ -146,7 +137,12 @@ def layer_loss_weights():
 
 
 def input_shape():
-    return (FLAGS.batch_size, FLAGS.model_tilesize, FLAGS.model_tilesize, gf.n_bands())
+    return (
+        csf.distribution.replica_batch_size(),
+        FLAGS.model_tilesize,
+        FLAGS.model_tilesize,
+        gf.n_bands(),
+    )
 
 
 def _dropout_rate(step):
@@ -164,7 +160,7 @@ def _learning_rate(step):
 
 
 @tf.function
-def _create_view(scene, step, dropout_rate, seed=None):
+def _create_view(scene, dropout_rate, seed=None):
     """
     Apply augmentation to a set of input imagery, creating a new view.
     Note that this function is autograph-traced and takes a Python integer input (seed),
@@ -175,8 +171,6 @@ def _create_view(scene, step, dropout_rate, seed=None):
     ----------
     scene : tf.Tensor
         A tensor of aligned input imagery.
-    step : tf.Tensor
-        A scalar, integer Tensor holding the current step.
     dropout_rate : tf.Tensor
         A scalar, float Tensor holding the current dropout rate.
         Included as an argument to work well with scheduling and autograph.
@@ -208,7 +202,7 @@ def _create_view(scene, step, dropout_rate, seed=None):
     scene = tf.nn.dropout(
         scene,
         dropout_rate,
-        noise_shape=(FLAGS.batch_size, 1, 1, gf.n_bands()),
+        noise_shape=(csf.distribution.replica_batch_size(), 1, 1, gf.n_bands()),
         name="band_dropout",
         seed=seed,
     )
@@ -233,8 +227,8 @@ def _contrastive_loss(representation_1, representation_2):
     (tf.Tensor, tf.Tensor)
         The total loss and accuracy over this batch.
     """
-    flat_1 = tf.reshape(representation_1, (FLAGS.batch_size, -1))
-    flat_2 = tf.reshape(representation_2, (FLAGS.batch_size, -1))
+    flat_1 = tf.reshape(representation_1, (csf.distribution.replica_batch_size(), -1))
+    flat_2 = tf.reshape(representation_2, (csf.distribution.replica_batch_size(), -1))
 
     # Element [i, j] is the dot-product similarity of the i-th representation of
     # view 1 and the j-th representation of view 2 for scenes (i, j) in the batch.
@@ -254,7 +248,8 @@ def _contrastive_loss(representation_1, representation_2):
     with tf.name_scope("forward"):  # Predict view 2 from view 1
         softmax = tf.nn.log_softmax(similarities, axis=1, name="log_probabilities")
         nce_loss_forward = tf.negative(
-            tf.reduce_sum(tf.linalg.diag_part(softmax)) / FLAGS.batch_size,
+            tf.reduce_sum(tf.linalg.diag_part(softmax))
+            / csf.distribution.global_batch_size(),
             name="nce_loss_forward",
         )
         del softmax
@@ -262,7 +257,8 @@ def _contrastive_loss(representation_1, representation_2):
     with tf.name_scope("backward"):  # Predict view 1 from view 2
         softmax = tf.nn.log_softmax(similarities, axis=0, name="log_probabilities")
         nce_loss_backward = tf.negative(
-            tf.reduce_sum(tf.linalg.diag_part(softmax)) / FLAGS.batch_size,
+            tf.reduce_sum(tf.linalg.diag_part(softmax))
+            / csf.distribution.global_batch_size(),
             name="nce_loss_backward",
         )
         del softmax
@@ -273,7 +269,11 @@ def _contrastive_loss(representation_1, representation_2):
         # Ideal predictions mean the greatest logit for each view is paired
         # (i.e. the diagonal dominates each row and column).
         ideal_predictions = tf.range(
-            0, FLAGS.batch_size, 1, dtype=tf.int64, name="ideal_predictions"
+            0,
+            csf.distribution.replica_batch_size(),
+            1,
+            dtype=tf.int64,
+            name="ideal_predictions",
         )
         predictions = tf.argmax(similarities, name="predictions")
         correct_predictions = tf.cast(
@@ -311,7 +311,7 @@ def _contrastive_loss(representation_1, representation_2):
 
 
 # TODO(Aidan): fix checkpoints
-def _run_unsupervised_training(dataset, distribution_strategy):
+def _run_unsupervised_training(dataset):
     """
     Perform a full unsupervised training run programmatically.
 
@@ -319,8 +319,6 @@ def _run_unsupervised_training(dataset, distribution_strategy):
     ----------
     dataset : tf.data.Dataset
         The dataset to train on.
-    distribution_strategy : None or tf.distribute.Strategy
-        The distribution strategy to use.
     """
     logging.info(
         "Starting unsupervised training run with flags:\n{}".format(
@@ -328,15 +326,9 @@ def _run_unsupervised_training(dataset, distribution_strategy):
         )
     )
 
-    distribution_scope = (
-        distribution_strategy.scope
-        if FLAGS.run_distributed
-        else csf.utils.dummy_context
-    )
-
     logging.debug("Building global objects.")
 
-    with distribution_scope():
+    with csf.distribution.distributed_context():
         summary_writer = tf.summary.create_file_writer(FLAGS.out_dir)
         tf.random.set_seed(FLAGS.random_seed)
 
@@ -387,9 +379,9 @@ def _run_unsupervised_training(dataset, distribution_strategy):
         )
         ckpt_manager = tf.train.CheckpointManager(
             ckpt,
-            FLAGS.out_dir,
-            FLAGS.max_checkpoints,
-            FLAGS.keep_checkpoint_every_n_hours,
+            directory=FLAGS.out_dir,
+            max_to_keep=FLAGS.max_checkpoints,
+            keep_checkpoint_every_n_hours=FLAGS.keep_checkpoint_every_n_hours,
         )
         last_ckpt = ckpt_manager.latest_checkpoint
 
@@ -428,13 +420,14 @@ def _run_unsupervised_training(dataset, distribution_strategy):
                     loss_metric.reset_states()
                     accuracy_metric.reset_states()
 
+        @csf.distribution.distribute_computation
         def _replicated_training_step(batch, dropout_rate):
             """Training step run on a single replica. Do not call directly."""
             with tf.name_scope("training_step"):
                 with tf.name_scope("view_1"):
-                    view_1 = _create_view(batch, step, dropout_rate, seed=1)
+                    view_1 = _create_view(batch, dropout_rate, seed=1)
                 with tf.name_scope("view_2"):
-                    view_2 = _create_view(batch, step, dropout_rate, seed=2)
+                    view_2 = _create_view(batch, dropout_rate, seed=2)
 
                 losses = []
 
@@ -461,19 +454,14 @@ def _run_unsupervised_training(dataset, distribution_strategy):
                 optimizer.apply_gradients(zip(gradients, encoder.trainable_weights))
 
         @tf.function
-        def train_steps(batch, dropout_rate):
-            if FLAGS.run_distributed:
-                for _ in tf.range(FLAGS.callback_frequency):
-                    distribution_strategy.experimental_run_v2(
-                        _replicated_training_step, args=(batch, dropout_rate)
-                    )
-            else:
-                for _ in tf.range(FLAGS.callback_frequency):
-                    _replicated_training_step(batch, dropout_rate)
+        def train_steps(iter_, dropout_rate):
+            for _ in tf.range(FLAGS.callback_frequency):
+                _replicated_training_step(args=(next(iter_), dropout_rate))
 
         logging.info("Beginning unsupervised training.")
-        for batch in dataset:
-            current_step = int(step.assign_add(FLAGS.callback_frequency))
+        dataset_iter = iter(dataset)
+        while True:
+            step.assign_add(FLAGS.callback_frequency)
 
             with summary_writer.as_default():
                 # Update schedules
@@ -484,26 +472,11 @@ def _run_unsupervised_training(dataset, distribution_strategy):
                     dropout_rate.assign(_dropout_rate(step))
                     tf.summary.scalar("dropout_rate", dropout_rate)
 
-                if current_step == FLAGS.callback_frequency:
-                    logging.debug("Running trace for first batch.")
-                    tf.summary.trace_on()
-
-                train_steps(batch, dropout_rate)
-
-                if current_step == FLAGS.callback_frequency:
-                    tf.summary.trace_export("training_step", step=0)
-                    tf.summary.trace_off()
-                    summary_writer.flush()
+                train_steps(dataset_iter, dropout_rate)
 
                 save_path = ckpt_manager.save()
-                logging.info(
-                    "Saving checkpoints for step {}: {}".format(current_step, save_path)
-                )
+                logging.info("Saving checkpoints at path: ".format(save_path))
                 write_metrics()
-
-                if current_step >= FLAGS.train_batches:
-                    logging.info("Finished training at step {}.".format(current_step))
-                    break
 
         logging.info("Done with unsupervised training.")
         ckpt_manager.save()
@@ -515,28 +488,10 @@ def main(_):
     logging.debug("Loading dataset.")
     dataset = csf.data.load_dataset()
 
-    if gf.using_tpu():
-        logging.info("Setting up TPU: {}.".format(FLAGS.tpu))
-        cluster_resolver = tf.distribute.cluster_resolver.TPUClusterResolver(
-            tpu=FLAGS.tpu
-        )
-        tf.config.experimental_connect_to_host(
-            cluster_resolver.master(), job_name="unsupervised_training"
-        )
-        tf.tpu.experimental.initialize_tpu_system(cluster_resolver)
-        distribution_strategy = tf.distribute.experimental.TPUStrategy(cluster_resolver)
-        dataset = distribution_strategy.experimental_distribute_dataset(dataset)
-        FLAGS.run_distributed = True
-        logging.info("Done setting up TPU cluster.")
-    elif FLAGS.run_distributed:
-        logging.info("Training with a mirrored distribution strategy.")
-        distribution_strategy = tf.distribute.MirroredStrategy()
-        dataset = distribution_strategy.experimental_distribute_dataset(dataset)
-    else:
-        logging.info("Training on a single device.")
-        distribution_strategy = None
+    csf.distribution.initialize()
+    dataset = csf.distribution.distribute_dataset(dataset)
 
-    _run_unsupervised_training(dataset, distribution_strategy)
+    _run_unsupervised_training(dataset)
 
 
 if __name__ == "__main__":
