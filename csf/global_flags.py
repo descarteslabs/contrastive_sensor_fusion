@@ -13,17 +13,6 @@ flags.DEFINE_list(
 )
 flags.mark_flag_as_required("bands")
 
-flags.DEFINE_string(
-    "tpu",
-    None,
-    "Address of the TPU to train with. Leave unspecified to train with other hardware.",
-)
-flags.DEFINE_bool(
-    "run_distributed",
-    False,
-    "Enables multi-device training. On by default when a TPU is specified. "
-    "Disables certain summaries.",
-)
 flags.DEFINE_integer(
     "random_seed", 1337, "Random seed used for all training and experiments."
 )
@@ -31,7 +20,3 @@ flags.DEFINE_integer(
 
 def n_bands():
     return len(FLAGS.bands)
-
-
-def using_tpu():
-    return FLAGS.tpu is not None

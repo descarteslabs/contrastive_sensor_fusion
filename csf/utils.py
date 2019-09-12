@@ -2,8 +2,6 @@
 Various utilities used project-wide.
 """
 
-from contextlib import contextmanager
-
 import tensorflow as tf
 from absl import flags
 
@@ -143,16 +141,10 @@ def visualize_batch(batch, visualize_bands, max_outputs=3):
     max_outputs : int
         Maximum number of images to show at a single step.
     """
-    if visualize_bands and not FLAGS.run_distributed:
+    if visualize_bands:
         # NOTE: Workaround for https://github.com/tensorflow/tensorflow/issues/28007
         #       Remove the device scope as soon as that issue's fixed.
         with tf.device("cpu:0"):
             names, triples = partition_imagery((batch / 2.0) + 0.5, visualize_bands)
             for name, triple in zip(names, triples):
                 tf.summary.image(name, triple, max_outputs=max_outputs)
-
-
-@contextmanager
-def dummy_context():
-    """A context manager that does nothing."""
-    yield None
