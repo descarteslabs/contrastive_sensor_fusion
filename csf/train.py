@@ -310,18 +310,6 @@ def _contrastive_loss(representation_1, representation_2):
     return nce_loss_total, batch_accuracy
 
 
-def _visualize_batch(batch):
-    if FLAGS.visualize_bands and not FLAGS.run_distributed:
-        # NOTE: Workaround for https://github.com/tensorflow/tensorflow/issues/28007
-        #       Remove the device scope as soon as that issue's fixed.
-        with tf.device("cpu:0"):
-            names, triples = csf.utils.partition_imagery(
-                (batch / 2.0) + 0.5, FLAGS.bands, FLAGS.visualize_bands
-            )
-            for name, triple in zip(names, triples):
-                tf.summary.image(name, triple)
-
-
 # TODO(Aidan): fix checkpoints
 def _run_unsupervised_training(dataset, distribution_strategy):
     """
@@ -335,7 +323,7 @@ def _run_unsupervised_training(dataset, distribution_strategy):
         The distribution strategy to use.
     """
     logging.info(
-        "Starting unsupervised training with flags:\n{}".format(
+        "Starting unsupervised training run with flags:\n{}".format(
             FLAGS.flags_into_string()
         )
     )
@@ -347,9 +335,10 @@ def _run_unsupervised_training(dataset, distribution_strategy):
     )
 
     logging.debug("Building global objects.")
+
     with distribution_scope():
-        tf.random.set_seed(FLAGS.random_seed)
         summary_writer = tf.summary.create_file_writer(FLAGS.out_dir)
+        tf.random.set_seed(FLAGS.random_seed)
 
         # Precomputed and kept static for use in tf.function
         layers_and_weights = layer_loss_weights().items()
@@ -487,9 +476,6 @@ def _run_unsupervised_training(dataset, distribution_strategy):
             current_step = int(step.assign_add(FLAGS.callback_frequency))
 
             with summary_writer.as_default():
-                with tf.name_scope("input_imagery"):
-                    _visualize_batch(batch)
-
                 # Update schedules
                 if FLAGS.learning_rate_warmup_batches:
                     learning_rate.assign(_learning_rate(step))

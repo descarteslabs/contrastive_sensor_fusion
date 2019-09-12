@@ -11,7 +11,7 @@ FLAGS = flags.FLAGS
 
 # Required arguments
 flags.DEFINE_integer(
-    "batch_size", None, "Batch size to use for unsupervised training.", lower_bound=2
+    "batch_size", None, "Batch size to use for unsupervised training.", lower_bound=1
 )
 flags.DEFINE_integer(
     "data_tilesize",
