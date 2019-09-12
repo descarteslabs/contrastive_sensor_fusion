@@ -310,7 +310,6 @@ def _contrastive_loss(representation_1, representation_2):
     return nce_loss_total, batch_accuracy
 
 
-# TODO(Aidan): fix checkpoints
 def _run_unsupervised_training(dataset):
     """
     Perform a full unsupervised training run programmatically.
@@ -474,8 +473,8 @@ def _run_unsupervised_training(dataset):
 
                 train_steps(dataset_iter, dropout_rate)
 
-                save_path = ckpt_manager.save()
-                logging.info("Saving checkpoints at path: ".format(save_path))
+                ckpt_manager.save()
+                logging.info("Saved checkpoint: {}.".format(ckpt.save_counter.numpy()))
                 write_metrics()
 
         logging.info("Done with unsupervised training.")
