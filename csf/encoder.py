@@ -14,7 +14,7 @@ RESNET_REPRESENTATION_LAYERS = [
 ]
 
 
-def resnet_encoder(input_shape):
+def resnet_encoder(input_shape, weights=None):
     """
     Build a ResNet50V2 encoder. Takes input in the range [-1, 1].
 
@@ -30,7 +30,7 @@ def resnet_encoder(input_shape):
         one for each activation of a residual stack.
     """
     model_base = tf.keras.applications.ResNet50V2(
-        input_shape=input_shape, include_top=False, weights=None, pooling=None
+        input_shape=input_shape, include_top=False, weights=weights, pooling=None
     )
     out_tensors = {
         layer: model_base.get_layer(layer).output
