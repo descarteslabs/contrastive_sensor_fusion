@@ -42,7 +42,9 @@ flags.mark_flags_as_mutual_exclusive(["data_file", "data_listing"], required=Tru
 
 # Optional flags to configure dataset loading
 flags.DEFINE_integer(
-    "shuffle_buffer_size", 8000, "Number of examples to hold in the shuffle buffer."
+    "shuffle_buffer_size",
+    8000,
+    "Number of examples to hold in the shuffle buffer. If <= 0, do not shuffle data.",
 )
 flags.DEFINE_integer(
     "tfrecord_buffer_size", 8388608, "Bytes of input buffering for each tfrecord file."
@@ -52,20 +54,16 @@ flags.DEFINE_integer(
 )
 
 
-def load_dataset():
-    """
-    Get the dataset used for unsupervised learning.
+def _load_tfrecord(filenames):
+    return tf.data.TFRecordDataset(
+        filenames,
+        buffer_size=FLAGS.tfrecord_buffer_size,
+        num_parallel_reads=FLAGS.tfrecord_parallel_reads,
+    )
 
-    The dataset consists of examples, which are tensors of input imagery concatenated,
-    serialized together into a byte string, and then saved as tf Examples with a single
-    key (see: data_feature_name).
 
-    Returns
-    -------
-    tf.data.Dataset
-        A dataset of batched examples, where each example is a set of coterminous
-        input bands.
-    """
+@tf.function
+def _preprocess_batch(batch):
     feature_spec = {
         FLAGS.data_feature_name: tf.io.FixedLenFeature([], tf.dtypes.string)
     }
@@ -77,59 +75,106 @@ def load_dataset():
         gf.n_bands(),
     )
 
-    def load_tfrecord(filenames):
-        return tf.data.TFRecordDataset(
-            filenames,
-            buffer_size=FLAGS.tfrecord_buffer_size,
-            num_parallel_reads=FLAGS.tfrecord_parallel_reads,
-        )
+    batch = tf.io.parse_example(batch, feature_spec)[FLAGS.data_feature_name]
+    batch = tf.io.decode_raw(batch, tf.dtypes.uint8)
+    batch = tf.reshape(batch, batch_shape)
 
-    def preprocess_batch(batch):
-        batch = tf.io.parse_example(batch, feature_spec)[FLAGS.data_feature_name]
-        batch = tf.io.decode_raw(batch, tf.dtypes.uint8)
-        batch = tf.reshape(batch, batch_shape)
+    # Apply augmentation with flips and rotations
+    which_aug = tf.random.uniform(shape=(), dtype=tf.dtypes.int32, minval=0, maxval=8)
+    aug_options = {
+        0: lambda: batch,
+        1: lambda: tf.transpose(batch, perm=[0, 2, 1, 3]),
+        2: lambda: tf.image.flip_up_down(batch),
+        3: lambda: tf.image.flip_left_right(tf.image.rot90(batch, k=1)),
+        4: lambda: tf.image.flip_left_right(batch),
+        5: lambda: tf.image.rot90(batch, k=1),
+        6: lambda: tf.image.rot90(batch, k=2),
+        7: lambda: tf.image.rot90(batch, k=3),
+    }
+    batch = tf.switch_case(which_aug, aug_options)
 
-        # Apply augmentation with flips and rotations
-        which_aug = tf.random.uniform(
-            shape=(), dtype=tf.dtypes.int32, minval=0, maxval=8
-        )
-        aug_options = {
-            0: lambda: batch,
-            1: lambda: tf.transpose(batch, perm=[0, 2, 1, 3]),
-            2: lambda: tf.image.flip_up_down(batch),
-            3: lambda: tf.image.flip_left_right(tf.image.rot90(batch, k=1)),
-            4: lambda: tf.image.flip_left_right(batch),
-            5: lambda: tf.image.rot90(batch, k=1),
-            6: lambda: tf.image.rot90(batch, k=2),
-            7: lambda: tf.image.rot90(batch, k=3),
-        }
-        batch = tf.switch_case(which_aug, aug_options)
+    batch = (tf.cast(batch, tf.float32) - 128.0) / 128.0
+    return batch
 
-        batch = (tf.cast(batch, tf.float32) - 128.0) / 128.0
-        return batch
 
-    if FLAGS.data_file:  # Dataset specified as a single tfrecord
-        ds = load_tfrecord(FLAGS.data_file).repeat()
-    else:  # Dataset specified as a file listing tfrecords
-        ds = (
-            tf.data.experimental.CsvDataset(FLAGS.data_listing, [tf.dtypes.string])
-            .repeat()
-            .interleave(
-                load_tfrecord,
-                cycle_length=FLAGS.tfrecord_parallel_reads,
-                num_parallel_calls=tf.data.experimental.AUTOTUNE,
+def load_dataset(input_context=None):
+    """
+    Load a dataset suitable for unsupervised training in a distributed environment:
+        - If `input_context` is provided, it is used to build a single-replica dataset.
+        - If `input_context` is not provided, builds a cross-replica dataset.
+
+    In some cases (e.g. multi-GPU) a single dataset can be copied to multiple devices,
+    so a cross-replica dataset should be built. This is also the default for
+    single-device training. In other cases (e.g. TPUs or clusters) each device
+    must build its own single-replica dataset by calling this function.
+
+    For most purposes it suffices to call this function with `input_context=None`.
+    Do not manually pass an input context; instead create per-replica datasets with
+    `tf.distribute.experimental_distribute_datasets_from_function`.
+
+    Parameters
+    ----------
+    input_context : None or tf.distribute.InputContext, optional
+        If None, build a cross-replica, whole-dataset pipeline, as normal.
+        If provided, shard the dataset to a single replica device.
+
+    Returns
+    -------
+    tf.data.Dataset
+        A dataset of batched examples, where each example is a set of coterminous
+        input bands.
+    """
+
+    # If input_context is not provided, the dataset will be built once and copied to
+    # each replica. Sharding and distribution will be handled automatically by the
+    # distribution strategy, so we batch by global batch size.
+    if input_context is not None and input_context.num_input_pipelines > 1:
+        shard_data = True
+        batch_size = input_context.get_per_replica_batch_size(FLAGS.batch_size)
+
+    # Otherwise, _this function_ is copied to each replica and called once independently
+    # per copy. The function should return an appropriate dataset for the replica --
+    # manually sharded to be non-overlapping with other replicas and batched to
+    # the replica batch size.
+    else:
+        shard_data = False
+        batch_size = FLAGS.batch_size
+
+    if FLAGS.data_file:
+        dataset = _load_tfrecord(FLAGS.data_file)
+
+        if shard_data:  # Shard granularity: lines of tfrecords
+            dataset = dataset.shard(
+                input_context.num_input_pipelines, input_context.input_pipeline_id
             )
+
+        dataset = dataset.repeat()
+    else:
+        dataset = tf.data.experimental.CsvDataset(
+            FLAGS.data_listing, [tf.dtypes.string]
         )
 
-    ds = (
-        ds.shuffle(
+        if shard_data:  # Shard granularity: full tfrecord files
+            dataset = dataset.shard(
+                input_context.num_input_pipelines, input_context.input_pipeline_id
+            )
+
+        dataset = dataset.repeat().interleave(
+            _load_tfrecord,
+            cycle_length=FLAGS.tfrecord_parallel_reads,
+            num_parallel_calls=tf.data.experimental.AUTOTUNE,
+        )
+
+    if FLAGS.shuffle_buffer_size > 0:
+        dataset = dataset.shuffle(
             FLAGS.shuffle_buffer_size,
             reshuffle_each_iteration=True,
             seed=FLAGS.random_seed,
         )
-        .batch(FLAGS.batch_size)
-        .map(preprocess_batch, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+
+    dataset = (
+        dataset.batch(batch_size, drop_remainder=True)
+        .map(_preprocess_batch, num_parallel_calls=tf.data.experimental.AUTOTUNE)
         .prefetch(tf.data.experimental.AUTOTUNE)
     )
-
-    return ds
+    return dataset

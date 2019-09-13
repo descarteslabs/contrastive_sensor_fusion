@@ -53,7 +53,7 @@ def num_replicas():
     """Get the number of synchronized replicas under the current strategy."""
     _assert_initialized()
     if FLAGS.run_distributed:
-        return _strategy.num_replicas_in_sync()
+        return _strategy.num_replicas_in_sync
     return 1
 
 
@@ -72,21 +72,40 @@ def replica_batch_size():
     return global_batch_size() // num_replicas()
 
 
-def distribute_dataset(dataset):
-    """Distribute a dataset under the current strategy."""
+def distribute_dataset_fn(dataset_fn):
+    """
+    Distribute a dataset under the current strategy.
+
+    Parameters
+    ----------
+    dataset_fn : tf.distribute.InputContext -> tf.data.Dataset
+        A function building a per-replica dataset.
+        See csf.data.load_dataset for example.
+
+    Returns
+    -------
+    tf.data.Dataset
+        A distributed dataset producing per-replica batches.
+    """
     _assert_initialized()
-    if FLAGS.run_distributed:
-        return _strategy.experimental_distribute_dataset(dataset)
-    return dataset
+
+    if not FLAGS.run_distributed:  # Single-device training: use a single normal dataset
+        logging.debug("Building single-device dataset.")
+        return dataset_fn(None)
+
+    if using_tpu():  # TPU training: build one dataset per function
+        logging.debug("Building per-replica datasets.")
+        return _strategy.experimental_distribute_datasets_from_function(dataset_fn)
+
+    # Multi-GPU training: build and distribute a single cross-replica dataset
+    logging.debug("Building cross-replica dataset.")
+    return _strategy.experimental_distribute_dataset(dataset_fn(None))
 
 
 def distribute_computation(function):
     """
     Given a function to be replicated, return an operation which runs that function
     replicated across hardware in the distributed context.
-
-    NOTE: runs autograph on the function, so be aware of the usual caveats
-    (graph compatibility, retracing, etc).
 
     Parameters
     ----------
@@ -97,20 +116,19 @@ def distribute_computation(function):
     -------
     tf.Function
         The function, run through autograph and converted to run in the distributed
-        context.
+        context. The function takes a single argument, which is a list of args to pass
+        to the wrapped function.
     """
     _assert_initialized()
 
     if FLAGS.run_distributed:
 
-        @tf.function
-        def _wrapper(args):
+        def _wrapper(*args):
             return _strategy.experimental_run_v2(function, args=args)
 
     else:
 
-        @tf.function
-        def _wrapper(args):
+        def _wrapper(*args):
             return function(*args)
 
     return _wrapper
@@ -124,6 +142,17 @@ def distributed_context():
     _assert_initialized()
     if FLAGS.run_distributed:
         return _strategy.scope()
+    return _dummy_context()
+
+
+def maybe_tpu_worker_context():
+    """
+    A context manager that places operations on the TPU worker thread if we're using
+    a TPU, and otherwise does nothing.
+    """
+    _assert_initialized()
+    if using_tpu():
+        return tf.device("/job:worker")
     return _dummy_context()
 
 
@@ -158,4 +187,4 @@ def initialize():
     logging.info("Done initializing distributed execution.")
     logging.info("Replicas: {}.".format(num_replicas()))
     logging.info("Global batch size: {}.".format(global_batch_size()))
-    logging.info("Replica batch size: {}.".format(global_batch_size()))
+    logging.info("Replica batch size: {}.".format(replica_batch_size()))
