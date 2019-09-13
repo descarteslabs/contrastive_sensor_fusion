@@ -20,8 +20,8 @@ def resnet_encoder(input_shape, weights=None):
 
     Parameters
     ----------
-    input_shape : tuple
-        Shape to use for the model's input.
+    n_input_bands : int
+        How many bands the model encodes.
 
     Returns
     -------
@@ -30,7 +30,10 @@ def resnet_encoder(input_shape, weights=None):
         one for each activation of a residual stack.
     """
     model_base = tf.keras.applications.ResNet50V2(
-        input_shape=input_shape, include_top=False, weights=weights, pooling=None
+        input_shape=(None, None, n_input_bands),
+        include_top=False,
+        weights=weights,
+        pooling=None,
     )
     out_tensors = {
         layer: model_base.get_layer(layer).output

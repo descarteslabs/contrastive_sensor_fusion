@@ -13,11 +13,6 @@ flags.DEFINE_list(
 )
 flags.mark_flag_as_required("bands")
 
-flags.DEFINE_string(
-    "tpu_address",
-    None,
-    "Address of the TPU to train with. Leave unspecified to train with other hardware.",
-)
 flags.DEFINE_integer(
     "random_seed", 1337, "Random seed used for all training and experiments."
 )
@@ -25,7 +20,3 @@ flags.DEFINE_integer(
 
 def n_bands():
     return len(FLAGS.bands)
-
-
-def using_tpu():
-    return FLAGS.tpu_address is not None
