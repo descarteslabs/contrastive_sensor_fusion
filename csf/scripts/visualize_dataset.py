@@ -25,6 +25,7 @@ FLAGS = flags.FLAGS
 
 def main(_):
     FLAGS.batch_size = FLAGS.images_per_page  # Prevent loading more bands than we plot
+    csf.distribution.initialize()
     dataset = csf.data.load_dataset()
     summary_writer = tf.summary.create_file_writer(FLAGS.out_dir)
     page = tf.Variable(0, trainable=False, name="step", dtype=tf.dtypes.int64)
@@ -37,6 +38,7 @@ def main(_):
     )
 
     for batch in dataset:
+        batch = tf.reshape(batch, csf.data.data_shape())
         current_page = int(page.assign_add(1))
         if current_page > FLAGS.max_pages:
             break
@@ -45,7 +47,7 @@ def main(_):
             _visualize_batch(batch)
         for i in range(FLAGS.views):
             with tf.name_scope("view_{}".format(i)), summary_writer.as_default():
-                view = csf.train._create_view(batch, FLAGS.band_dropout_rate, i)
+                view = csf.train._create_view(batch, i)
                 _visualize_batch(view)
 
 
