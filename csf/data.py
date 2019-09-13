@@ -41,60 +41,30 @@ flags.mark_flags_as_mutual_exclusive(["data_file", "data_listing"], required=Tru
 
 
 # Optional flags to configure dataset loading
+flags.DEFINE_bool(
+    "enable_augmentation",
+    False,
+    "Whether to enable streaming augmentation (rotations and flips).",
+)
+flags.DEFINE_bool(
+    "enable_experimental_optimization",
+    True,
+    "Whether to enable experimental optimizations.",
+)
 flags.DEFINE_integer(
     "shuffle_buffer_size",
     8000,
     "Number of examples to hold in the shuffle buffer. If <= 0, do not shuffle data.",
 )
 flags.DEFINE_integer(
-    "tfrecord_buffer_size", 8388608, "Bytes of input buffering for each tfrecord file."
+    "tfrecord_parallel_reads", 16, "Number of tfrecord files to read in parallel."
 )
 flags.DEFINE_integer(
-    "tfrecord_parallel_reads", 64, "Number of tfrecord files to read in parallel."
+    "tfrecord_sequential_reads",
+    16,
+    "Number of exampls to read sequentially from each tfrecord.",
 )
-
-
-def _load_tfrecord(filenames):
-    return tf.data.TFRecordDataset(
-        filenames,
-        buffer_size=FLAGS.tfrecord_buffer_size,
-        num_parallel_reads=FLAGS.tfrecord_parallel_reads,
-    )
-
-
-@tf.function
-def _preprocess_batch(batch):
-    feature_spec = {
-        FLAGS.data_feature_name: tf.io.FixedLenFeature([], tf.dtypes.string)
-    }
-
-    batch_shape = (
-        FLAGS.batch_size,
-        FLAGS.data_tilesize,
-        FLAGS.data_tilesize,
-        gf.n_bands(),
-    )
-
-    batch = tf.io.parse_example(batch, feature_spec)[FLAGS.data_feature_name]
-    batch = tf.io.decode_raw(batch, tf.dtypes.uint8)
-    batch = tf.reshape(batch, batch_shape)
-
-    # Apply augmentation with flips and rotations
-    which_aug = tf.random.uniform(shape=(), dtype=tf.dtypes.int32, minval=0, maxval=8)
-    aug_options = {
-        0: lambda: batch,
-        1: lambda: tf.transpose(batch, perm=[0, 2, 1, 3]),
-        2: lambda: tf.image.flip_up_down(batch),
-        3: lambda: tf.image.flip_left_right(tf.image.rot90(batch, k=1)),
-        4: lambda: tf.image.flip_left_right(batch),
-        5: lambda: tf.image.rot90(batch, k=1),
-        6: lambda: tf.image.rot90(batch, k=2),
-        7: lambda: tf.image.rot90(batch, k=3),
-    }
-    batch = tf.switch_case(which_aug, aug_options)
-
-    batch = (tf.cast(batch, tf.float32) - 128.0) / 128.0
-    return batch
+flags.DEFINE_integer("prefetch_batches", 32, "Number of batches to prefetch.")
 
 
 def load_dataset(input_context=None):
@@ -125,6 +95,17 @@ def load_dataset(input_context=None):
         input bands.
     """
 
+    # NOTE: Make sure to test and fine-tune these optimizations for any new hardware.
+    options = tf.data.Options()
+    options.experimental_deterministic = False
+    if FLAGS.enable_experimental_optimization:
+        options.experimental_optimization.autotune_buffers = True
+        options.experimental_optimization.autotune_cpu_budget = True
+        options.experimental_optimization.parallel_batch = True
+        options.experimental_optimization.map_fusion = True
+        options.experimental_optimization.map_vectorization.enabled = False
+        options.experimental_slack = True
+
     # If input_context is not provided, the dataset will be built once and copied to
     # each replica. Sharding and distribution will be handled automatically by the
     # distribution strategy, so we batch by global batch size.
@@ -140,8 +121,10 @@ def load_dataset(input_context=None):
         shard_data = False
         batch_size = FLAGS.batch_size
 
+    input_shape = (batch_size, FLAGS.data_tilesize, FLAGS.data_tilesize, gf.n_bands())
+
     if FLAGS.data_file:
-        dataset = _load_tfrecord(FLAGS.data_file)
+        dataset = tf.data.TFRecordDataset(FLAGS.data_file).with_options(options)
 
         if shard_data:  # Shard granularity: lines of tfrecords
             dataset = dataset.shard(
@@ -150,8 +133,13 @@ def load_dataset(input_context=None):
 
         dataset = dataset.repeat()
     else:
-        dataset = tf.data.experimental.CsvDataset(
-            FLAGS.data_listing, [tf.dtypes.string]
+        dataset = (
+            tf.data.experimental.CsvDataset(FLAGS.data_listing, [tf.dtypes.string])
+            .with_options(options)
+            .map(
+                lambda x: tf.reshape(x, []),
+                num_parallel_calls=tf.data.experimental.AUTOTUNE,
+            )
         )
 
         if shard_data:  # Shard granularity: full tfrecord files
@@ -160,10 +148,39 @@ def load_dataset(input_context=None):
             )
 
         dataset = dataset.repeat().interleave(
-            _load_tfrecord,
+            tf.data.TFRecordDataset,
             cycle_length=FLAGS.tfrecord_parallel_reads,
+            block_length=FLAGS.tfrecord_sequential_reads,
             num_parallel_calls=tf.data.experimental.AUTOTUNE,
         )
+
+    feature_spec = {
+        FLAGS.data_feature_name: tf.io.FixedLenFeature([], tf.dtypes.string)
+    }
+
+    def preprocess(batch):
+        batch = tf.io.parse_example(batch, feature_spec)
+        batch = tf.io.decode_raw(batch[FLAGS.data_feature_name], tf.dtypes.uint8)
+        batch = tf.cast(batch, tf.dtypes.float32)
+        batch = (batch - 128.0) / 128.0
+        return batch
+
+    def augment(batch):
+        which_aug = tf.random.uniform(
+            shape=(), dtype=tf.dtypes.int32, minval=0, maxval=8
+        )
+        aug_options = {
+            0: lambda: batch,
+            1: lambda: tf.transpose(batch, perm=[0, 2, 1, 3]),
+            2: lambda: tf.image.flip_up_down(batch),
+            3: lambda: tf.image.flip_left_right(tf.image.rot90(batch, k=1)),
+            4: lambda: tf.image.flip_left_right(batch),
+            5: lambda: tf.image.rot90(batch, k=1),
+            6: lambda: tf.image.rot90(batch, k=2),
+            7: lambda: tf.image.rot90(batch, k=3),
+        }
+        batch = tf.switch_case(which_aug, aug_options)
+        return batch
 
     if FLAGS.shuffle_buffer_size > 0:
         dataset = dataset.shuffle(
@@ -172,9 +189,12 @@ def load_dataset(input_context=None):
             seed=FLAGS.random_seed,
         )
 
-    dataset = (
-        dataset.batch(batch_size, drop_remainder=True)
-        .map(_preprocess_batch, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-        .prefetch(tf.data.experimental.AUTOTUNE)
+    # NOTE: examples are provided "flattened" and must be reshaped
+    dataset = dataset.batch(batch_size, drop_remainder=True).map(
+        preprocess, tf.data.experimental.AUTOTUNE
     )
-    return dataset
+
+    if FLAGS.enable_augmentation:
+        dataset = dataset.map(augment, tf.data.experimental.AUTOTUNE)
+
+    return dataset.prefetch(FLAGS.prefetch_batches)
