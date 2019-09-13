@@ -4,10 +4,8 @@ Code for training models unsupervised using contrastive sensor fusion.
 Some components based on https://github.com/tensorflow/models/tree/master/official/bert.
 """
 
-import sys
-
 import tensorflow as tf
-from absl import app, flags, logging
+from absl import flags, logging
 
 import csf.data
 import csf.distribution
@@ -249,7 +247,7 @@ def _contrastive_loss(representation_1, representation_2):
 
 
 # TODO(Aidan): re-introduce: metrics, summaries, schedules, checkpoints
-def _run_unsupervised_training():
+def run_unsupervised_training():
     """
     Perform a full unsupervised training run programmatically.
     """
@@ -258,6 +256,7 @@ def _run_unsupervised_training():
             FLAGS.flags_into_string()
         )
     )
+    csf.distribution.initialize()
     data_shape = csf.data.data_shape()
     layers_and_weights = layer_loss_weights().items()
 
@@ -317,13 +316,3 @@ def _run_unsupervised_training():
             )
 
         logging.info("Done with unsupervised training.")
-
-
-def main(_):
-    FLAGS(sys.argv)
-    csf.distribution.initialize()
-    _run_unsupervised_training()
-
-
-if __name__ == "__main__":
-    app.run(main)
