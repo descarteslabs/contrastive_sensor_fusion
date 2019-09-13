@@ -14,7 +14,7 @@ RESNET_REPRESENTATION_LAYERS = [
 ]
 
 
-def resnet_encoder(n_input_bands):
+def resnet_encoder(input_shape, weights=None):
     """
     Build a ResNet50V2 encoder. Takes input in the range [-1, 1].
 
@@ -32,7 +32,7 @@ def resnet_encoder(n_input_bands):
     model_base = tf.keras.applications.ResNet50V2(
         input_shape=(None, None, n_input_bands),
         include_top=False,
-        weights=None,
+        weights=weights,
         pooling=None,
     )
     out_tensors = {
