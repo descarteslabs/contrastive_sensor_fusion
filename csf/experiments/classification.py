@@ -1,26 +1,23 @@
+import glob
+import os.path
 import subprocess as sp
 import tensorflow as tf
 from tensorflow.keras.layers import Concatenate, Conv2D, Dense, Input, Lambda, GlobalMaxPooling2D
 from tensorflow.keras import Model
 import tensorflow.keras.backend as K
 
-from csf.encoder import resnet_encoder
+from csf.experiments.utils import default_bands, encoder_head
 
 
-def classification_model(size, n_labels, products=None, batchsize=8):
+def classification_model(size, n_labels, bands=None, batchsize=8, checkpoint_dir=None):
     """Create a model based on the trained encoder (see encoder.py)
     for classification. Can operate on any subset of products or bands. """
-
-    default_products = ('SPOT', 'NAIP', 'PHR') # TODO: import band names
-    if products is None:
-        products = default_products
-
-    encoder = resnet_encoder((size, size, 12))
-    encoder.trainable = False
-
-    model_inputs = Input(batch_shape=(batchsize, size, size, 12))
-
-    encoded = encoder(model_inputs)
+    model_inputs, _, encoded = encoder_head(
+        size,
+        bands=bands,
+        batchsize=batchsize,
+        checkpoint_dir=checkpoint_dir
+    )
 
     stack3 = encoded['conv4_block5_out']
     stack4 = encoded['conv5_block3_out']
@@ -32,11 +29,13 @@ def classification_model(size, n_labels, products=None, batchsize=8):
     pooled4 = GlobalMaxPooling2D()(conv4)
 
     cat = Concatenate(axis=-1)([pooled3, pooled4])
-    out = Dense(units=n_labels, activation='sigmoid')(cat)
+    dense = Dense(units=1000, activation='relu')(cat)
+    out = Dense(units=n_labels, activation='sigmoid')(dense)
+
     return Model(inputs=model_inputs, outputs=[out])
 
 
-def get_dataset(remote_prefix, n_labels):
+def get_dataset(remote_prefix, n_labels, band_indices):
     features = {
         'spot_naip_phr': tf.io.FixedLenSequenceFeature([], dtype=tf.string, allow_missing=True),
         'label': tf.io.FixedLenSequenceFeature([], dtype=tf.int64, allow_missing=True)
@@ -48,32 +47,85 @@ def get_dataset(remote_prefix, n_labels):
     def _parse_image_function(example_proto):
         example_features = tf.io.parse_single_example(example_proto, features)
         image = tf.reshape(tf.io.decode_raw(example_features['spot_naip_phr'], tf.uint8), input_shape)
+        bands_to_keep = list()
+        for index in band_indices:
+            bands_to_keep.append(tf.expand_dims(image[...,index], axis=-1))
+        image = tf.concat(bands_to_keep, axis=-1)
         target = tf.reshape(tf.one_hot(example_features['label'], depth=n_labels), target_shape)
         return image, target
 
-    tfrecord_paths = sp.check_output(('gsutil', '-m', 'ls', remote_prefix)).decode("ascii").split('\n')
+    if remote_prefix.startswith('gs://'):
+        tfrecord_paths = sp.check_output(('gsutil', '-m', 'ls', remote_prefix)).decode("ascii").split('\n')
+    else:
+        tfrecord_paths = [filename for filename in glob.glob(remote_prefix) if os.path.isfile(filename)]
     dataset = tf.data.TFRecordDataset(tfrecord_paths)
     return dataset.map(_parse_image_function)
 
 
-if __name__ == '__main__':
+def degrading_inputs_experiment():
     batchsize = 8
     n_labels = 12
-    model = classification_model(size=128, n_labels=n_labels, products=('SPOT', 'NAIP', 'PHR'), batchsize=batchsize)
+    n_total_samples = 8600
 
-    model.compile(
-        optimizer=tf.keras.optimizers.Ftrl(),
-        loss=tf.keras.losses.CategoricalCrossentropy(),
-        metrics=[tf.keras.metrics.CategoricalAccuracy(),
-                 tf.keras.metrics.TopKCategoricalAccuracy(k=3)]
-    )
+    # Drop bands starting from high resolution to lower resolution
+    for n_bands in range(12, 0, -1):
+        band_indices = list(range(n_bands))
 
-    # Provides 4-band NAIP images and OSM labels:
-    dataset = get_dataset('gs://dl-appsci/basenets/osm_data/osm_*.tfrecord', n_labels=n_labels)
+        # Provides 4-band SPOT, NAIP, PHR images and OSM labels:
+        #dataset = get_dataset('gs://dl-appsci/basenets/osm_data/osm_*.tfrecord', n_labels=n_labels, n_bands=n_bands)
+        # Streaming from google storage is bugging out, so we download locally first:
+        dataset = get_dataset('./osm_data/osm_*.tfrecord', n_labels=n_labels, band_indices=band_indices)
 
-    train_dataset = dataset.shuffle(buffer_size=1024).batch(batchsize)
-    #eval_dataset = eval_dataset.batch(batchsize) # TODO: split dataset
-    #test_dataset = test_dataset.batch(batchsize)
+        n_train_samples = int(n_total_samples * 0.8)
+        n_test_samples = int(n_total_samples * 0.1)
+        n_val_samples = int(n_total_samples * 0.1)
 
-    model.fit(train_dataset, epochs=4)
-    #model.evaluate(test_dataset)
+        train_dataset = dataset.take(n_train_samples)
+        test_dataset = dataset.take(n_test_samples)
+        val_dataset = dataset.take(n_val_samples)
+
+        train_dataset = dataset.shuffle(buffer_size=n_train_samples).batch(batchsize).repeat()
+        test_dataset = test_dataset.batch(batchsize).repeat()
+        val_dataset = val_dataset.batch(batchsize).repeat()
+
+        checkpoint_dir = 'gs://dl-appsci/basenets/outputs/basenets_fusion_test_tf2/'
+        model = classification_model(
+            size=128,
+            n_labels=n_labels,
+            bands=default_bands[:n_bands],
+            batchsize=batchsize,
+            checkpoint_dir=checkpoint_dir
+        )
+
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=2e-5, clipnorm=1.0),
+            loss=tf.keras.losses.CategoricalCrossentropy(),
+            metrics=[tf.keras.metrics.CategoricalAccuracy(),
+                     tf.keras.metrics.TopKCategoricalAccuracy(k=2),
+            ]
+        )
+
+        model.fit(
+            train_dataset,
+            epochs=64,
+            steps_per_epoch=n_train_samples // batchsize,
+            validation_data=val_dataset,
+            validation_steps=n_val_samples // batchsize,
+            callbacks=[
+                tf.keras.callbacks.ModelCheckpoint(
+                    'classification-%02dband-{epoch:02d}-{val_categorical_accuracy:.4f}.h5' % (n_bands,),
+                    verbose=1,
+                    mode='max',
+                    save_weights_only=True
+                )
+            ]
+        )
+        model.evaluate(test_dataset, steps=n_test_samples // batchsize)
+
+
+def degrading_dataset_experiment():
+    pass # TODO
+
+
+if __name__ == '__main__':
+    degrading_inputs_experiment()
