@@ -26,6 +26,11 @@ flags.DEFINE_bool(
     "Enables multi-device training. On by default when a TPU is specified. "
     "Disables certain summaries.",
 )
+flags.DEFINE_bool(
+    "multi_host",
+    False,
+    "Enables distributing ops across multiple hosts, as in a TPU pod.",
+)
 
 # Internal globals
 _strategy = None
@@ -93,11 +98,11 @@ def distribute_dataset_fn(dataset_fn):
         logging.debug("Building single-device dataset.")
         return dataset_fn(None)
 
-    if using_tpu():  # TPU training: build one dataset per function
+    if FLAGS.multi_host:  # Build one dataset per function
         logging.debug("Building per-replica datasets.")
         return _strategy.experimental_distribute_datasets_from_function(dataset_fn)
 
-    # Multi-GPU training: build and distribute a single cross-replica dataset
+    # Multi-GPU or TPU training: build and distribute a single cross-replica dataset
     logging.debug("Building cross-replica dataset.")
     return _strategy.experimental_distribute_dataset(dataset_fn(None))
 
@@ -123,12 +128,12 @@ def distribute_computation(function):
 
     if FLAGS.run_distributed:
 
-        def _wrapper(*args):
+        def _wrapper(args):
             return _strategy.experimental_run_v2(function, args=args)
 
     else:
 
-        def _wrapper(*args):
+        def _wrapper(args):
             return function(*args)
 
     return _wrapper
@@ -145,7 +150,7 @@ def distributed_context():
     return _dummy_context()
 
 
-def maybe_tpu_worker_context():
+def tpu_worker_context():
     """
     A context manager that places operations on the TPU worker thread if we're using
     a TPU, and otherwise does nothing.
@@ -165,7 +170,6 @@ def initialize():
     global _initialized
 
     if using_tpu():
-        # TODO(Aidan): fix TPU training
         logging.info("Setting up TPU: {}.".format(FLAGS.tpu))
         FLAGS.run_distributed = True
         cluster_resolver = tf.distribute.cluster_resolver.TPUClusterResolver(
@@ -176,7 +180,6 @@ def initialize():
         _strategy = tf.distribute.experimental.TPUStrategy(cluster_resolver)
         logging.info("Done setting up TPU cluster.")
     elif FLAGS.run_distributed:
-        # TODO(Aidan): fix distributed training
         logging.info("Setting up a mirrored distribution strategy.")
         _strategy = tf.distribute.MirroredStrategy()
     else:
