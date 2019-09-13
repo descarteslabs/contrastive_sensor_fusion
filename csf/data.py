@@ -5,6 +5,7 @@ Utilities to load data for the unsupervised learning task.
 import tensorflow as tf
 from absl import flags
 
+import csf.distribution
 import csf.global_flags as gf
 
 FLAGS = flags.FLAGS
@@ -67,6 +68,16 @@ flags.DEFINE_integer(
 flags.DEFINE_integer("prefetch_batches", 32, "Number of batches to prefetch.")
 
 
+def data_shape():
+    """Get the shape of a single batch of input imagery."""
+    return (
+        csf.distribution.replica_batch_size(),
+        FLAGS.data_tilesize,
+        FLAGS.data_tilesize,
+        gf.n_bands(),
+    )
+
+
 def load_dataset(input_context=None):
     """
     Load a dataset suitable for unsupervised training in a distributed environment:
@@ -75,7 +86,7 @@ def load_dataset(input_context=None):
 
     In some cases (e.g. multi-GPU) a single dataset can be copied to multiple devices,
     so a cross-replica dataset should be built. This is also the default for
-    single-device training. In other cases (e.g. TPUs or clusters) each device
+    single-device training. In other cases (e.g. TPU pods or clusters) each device
     must build its own single-replica dataset by calling this function.
 
     For most purposes it suffices to call this function with `input_context=None`.
@@ -92,8 +103,9 @@ def load_dataset(input_context=None):
     -------
     tf.data.Dataset
         A dataset of batched examples, where each example is a set of coterminous
-        input bands.
+        input bands. Examples are flattened for efficient communication with hardware.
     """
+    image_dims = (FLAGS.data_tilesize ** 2) * gf.n_bands()
 
     # NOTE: Make sure to test and fine-tune these optimizations for any new hardware.
     options = tf.data.Options()
@@ -120,8 +132,6 @@ def load_dataset(input_context=None):
     else:
         shard_data = False
         batch_size = FLAGS.batch_size
-
-    input_shape = (batch_size, FLAGS.data_tilesize, FLAGS.data_tilesize, gf.n_bands())
 
     if FLAGS.data_file:
         dataset = tf.data.TFRecordDataset(FLAGS.data_file).with_options(options)
@@ -160,7 +170,9 @@ def load_dataset(input_context=None):
 
     def preprocess(batch):
         batch = tf.io.parse_example(batch, feature_spec)
-        batch = tf.io.decode_raw(batch[FLAGS.data_feature_name], tf.dtypes.uint8)
+        batch = tf.io.decode_raw(
+            batch[FLAGS.data_feature_name], tf.dtypes.uint8, fixed_length=image_dims
+        )
         batch = tf.cast(batch, tf.dtypes.float32)
         batch = (batch - 128.0) / 128.0
         return batch
@@ -189,7 +201,7 @@ def load_dataset(input_context=None):
             seed=FLAGS.random_seed,
         )
 
-    # NOTE: examples are provided "flattened" and must be reshaped
+    # NOTE: examples are provided "flattened" and must be reshaped into images
     dataset = dataset.batch(batch_size, drop_remainder=True).map(
         preprocess, tf.data.experimental.AUTOTUNE
     )
