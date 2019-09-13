@@ -98,7 +98,7 @@ def degrading_inputs_experiment():
         )
 
         model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=2e-5, clipnorm=1.0),
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5, clipnorm=1.0),
             loss=tf.keras.losses.CategoricalCrossentropy(),
             metrics=[tf.keras.metrics.CategoricalAccuracy(),
                      tf.keras.metrics.TopKCategoricalAccuracy(k=2),
@@ -124,8 +124,67 @@ def degrading_inputs_experiment():
 
 
 def degrading_dataset_experiment():
-    pass # TODO
+    batchsize = 8
+    n_labels = 12
+    n_total_samples = 8600
+    n_bands = 12
+
+    # Drop dataset samples
+    for n_samples_keep in (n_total_samples // 3, 2 * n_total_samples // 3, n_total_samples):
+        band_indices = list(range(n_bands))
+
+        # Provides 4-band SPOT, NAIP, PHR images and OSM labels:
+        #dataset = get_dataset('***REMOVED***', n_labels=n_labels, n_bands=n_bands)
+        # Streaming from google storage is bugging out, so we download locally first:
+        dataset = get_dataset('./osm_data/osm_*.tfrecord', n_labels=n_labels, band_indices=band_indices)
+
+        n_train_samples = int(n_samples_keep * 0.8)
+        n_test_samples = int(n_samples_keep * 0.1)
+        n_val_samples = int(n_samples_keep * 0.1)
+
+        train_dataset = dataset.take(n_train_samples)
+        test_dataset = dataset.take(n_test_samples)
+        val_dataset = dataset.take(n_val_samples)
+
+        train_dataset = dataset.shuffle(buffer_size=n_train_samples).batch(batchsize).repeat()
+        test_dataset = test_dataset.batch(batchsize).repeat()
+        val_dataset = val_dataset.batch(batchsize).repeat()
+
+        checkpoint_dir = '***REMOVED***outputs/basenets_fusion_test_tf2/'
+        model = classification_model(
+            size=128,
+            n_labels=n_labels,
+            bands=default_bands[:n_bands],
+            batchsize=batchsize,
+            checkpoint_dir=checkpoint_dir
+        )
+
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5, clipnorm=1.0),
+            loss=tf.keras.losses.CategoricalCrossentropy(),
+            metrics=[tf.keras.metrics.CategoricalAccuracy(),
+                     tf.keras.metrics.TopKCategoricalAccuracy(k=2),
+            ]
+        )
+
+        model.fit(
+            train_dataset,
+            epochs=64,
+            steps_per_epoch=n_train_samples // batchsize,
+            validation_data=val_dataset,
+            validation_steps=n_val_samples // batchsize,
+            callbacks=[
+                tf.keras.callbacks.ModelCheckpoint(
+                    'classification-%04dsample-{epoch:02d}-{val_categorical_accuracy:.4f}.h5' % (n_samples_keep,),
+                    verbose=1,
+                    mode='max',
+                    save_weights_only=True
+                )
+            ]
+        )
+        model.evaluate(test_dataset, steps=n_test_samples // batchsize)
 
 
 if __name__ == '__main__':
-    degrading_inputs_experiment()
+    #degrading_inputs_experiment()
+    degrading_dataset_experiment()

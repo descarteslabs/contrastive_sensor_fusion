@@ -14,7 +14,7 @@ RESNET_REPRESENTATION_LAYERS = [
 ]
 
 
-def resnet_encoder(input_shape, weights=None):
+def resnet_encoder(n_input_bands, weights=None):
     """
     Build a ResNet50V2 encoder. Takes input in the range [-1, 1].
 
