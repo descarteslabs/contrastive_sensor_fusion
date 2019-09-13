@@ -37,7 +37,7 @@ def encoder_head(size, bands=None, batchsize=8, checkpoint_dir=None):
     if n_bands <= 0:
         raise ValueError("You must provide some bands")
 
-    encoder = resnet_encoder((size, size, 12))
+    encoder = resnet_encoder(n_input_bands=12)
     # Load upstream weights into encoder
     if checkpoint_dir is not None:
         weights_path = tf.train.latest_checkpoint(checkpoint_dir)
