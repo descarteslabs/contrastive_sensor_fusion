@@ -91,9 +91,14 @@ flags.DEFINE_string(
 )
 flags.DEFINE_integer(
     "callback_frequency",
-    100,
+    10,
     "How many batches to train for between writing summaries and checkpoints, and "
     "updating schedules.",
+)
+flags.DEFINE_integer(
+    "checkpoint_frequency",
+    10,
+    "How many callbacks to train for between saving checkpoints.",
 )
 flags.DEFINE_integer("max_checkpoints", 100, "The maximum number of checkpoints kept.")
 flags.DEFINE_integer(
@@ -267,7 +272,7 @@ def _contrastive_loss(representation_1, representation_2):
     return loss, accuracy
 
 
-# TODO(Aidan): re-introduce: schedules, checkpoints
+# TODO(Aidan): re-introduce: schedules
 def run_unsupervised_training():
     """
     Perform a full unsupervised training run programmatically.
@@ -295,6 +300,21 @@ def run_unsupervised_training():
 
         # TODO(Aidan): scheduled learning rate
         optimizer = tf.optimizers.Adam(1e-3, clipnorm=FLAGS.gradient_clipnorm)
+
+        logging.debug("Building checkpoint objects.")
+        ckpt = tf.train.Checkpoint(encoder=encoder, optimizer=optimizer)
+        ckpt_manager = tf.train.CheckpointManager(
+            ckpt,
+            FLAGS.out_dir,
+            FLAGS.max_checkpoints,
+            FLAGS.keep_checkpoint_every_n_hours,
+        )
+        restore_ckpt = FLAGS.initial_checkpoint or ckpt_manager.latest_checkpoint
+        if restore_ckpt:
+            logging.info("Continuing training from checkpoint: {}".format(restore_ckpt))
+            ckpt.restore(restore_ckpt)
+        else:
+            logging.info("Initializing encoder and optimizer from scratch.")
 
         logging.debug("Building metrics.")
         summary_writer = tf.summary.create_file_writer(FLAGS.out_dir)
@@ -352,7 +372,6 @@ def run_unsupervised_training():
 
                 gradients = tape.gradient(loss_total, encoder_vars)
                 optimizer.apply_gradients(zip(gradients, encoder_vars))
-
                 loss_metric.update_state(loss_total)
 
         @tf.function
@@ -370,7 +389,13 @@ def run_unsupervised_training():
             )
             write_metrics(step)
 
+            if (step // FLAGS.callback_frequency) % FLAGS.checkpoint_frequency == 0:
+                ckpt_path = ckpt_manager.save()
+                logging.info("Saved checkpoint at path: {}.".format(ckpt_path))
+
             if FLAGS.max_batches and step >= FLAGS.max_batches:
                 break
 
+        ckpt_path = ckpt_manager.save()
         logging.info("Done with unsupervised training.")
+        logging.info("Saving final checkpoint at path: {}.".format(ckpt_path))
