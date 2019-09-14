@@ -78,6 +78,11 @@ flags.DEFINE_float(
 flags.DEFINE_string(
     "out_dir", None, "Path used to store the outputs of unsupervised training."
 )
+flags.DEFINE_integer(
+    "max_batches",
+    None,
+    "Number of batches to train for. If unspecified, continue until user-terminated.",
+)
 flags.DEFINE_string(
     "initial_checkpoint",
     None,
@@ -243,10 +248,26 @@ def _contrastive_loss(representation_1, representation_2):
             name="nce_loss_backward",
         )
 
-    return nce_loss_forward + nce_loss_backward
+    with tf.name_scope("compute_accuracy"):
+        # Ideal predictions mean the greatest logit for each view is paired
+        # (i.e. the diagonal dominates each row and column).
+        ideal_predictions = tf.range(
+            start=0,
+            limit=csf.distribution.replica_batch_size(),
+            dtype=tf.dtypes.int32,
+            name="ideal_predictions",
+        )
+        predictions = tf.argmax(similarities, 0, tf.dtypes.int32, name="predictions")
+        correct_predictions = tf.cast(
+            tf.equal(predictions, ideal_predictions), tf.dtypes.float32
+        )
+        accuracy = tf.reduce_mean(correct_predictions)
+
+    loss = nce_loss_forward + nce_loss_backward
+    return loss, accuracy
 
 
-# TODO(Aidan): re-introduce: metrics, summaries, schedules, checkpoints
+# TODO(Aidan): re-introduce: schedules, checkpoints
 def run_unsupervised_training():
     """
     Perform a full unsupervised training run programmatically.
@@ -275,6 +296,33 @@ def run_unsupervised_training():
         # TODO(Aidan): scheduled learning rate
         optimizer = tf.optimizers.Adam(1e-3, clipnorm=FLAGS.gradient_clipnorm)
 
+        logging.debug("Building metrics.")
+        summary_writer = tf.summary.create_file_writer(FLAGS.out_dir)
+        loss_metric = tf.metrics.Mean("loss", tf.dtypes.float32)
+        layer_loss_metrics = {
+            layer: tf.metrics.Mean("{}_loss".format(layer), tf.dtypes.float32)
+            for layer in layer_loss_weights().keys()
+        }
+        layer_accuracy_metrics = {
+            layer: tf.metrics.Mean("{}_accuracy".format(layer), tf.dtypes.float32)
+            for layer in layer_loss_weights().keys()
+        }
+        all_metrics = (
+            [loss_metric]
+            + list(layer_loss_metrics.values())
+            + list(layer_accuracy_metrics.values())
+        )
+
+        def write_metrics(step):
+            with summary_writer.as_default():
+                for metric in all_metrics:
+                    tf.summary.scalar(metric.name, metric.result(), step)
+                    metric.reset_states()
+
+            summary_writer.flush()
+
+        logging.debug("Building distributed execution functions.")
+
         @csf.distribution.distribute_computation
         def _replicated_training_step(batch):
             batch = tf.reshape(batch, data_shape)
@@ -292,15 +340,20 @@ def run_unsupervised_training():
 
                     for layer, weight in layers_and_weights:
                         with tf.name_scope("layer_{}".format(layer)):
-                            loss = _contrastive_loss(
+                            loss, accuracy = _contrastive_loss(
                                 representations_1[layer], representations_2[layer]
                             )
+
                             losses.append(weight * loss)
+                            layer_loss_metrics[layer].update_state(loss)
+                            layer_accuracy_metrics[layer].update_state(accuracy)
 
                     loss_total = tf.reduce_sum(losses, name="loss_total")
 
                 gradients = tape.gradient(loss_total, encoder_vars)
                 optimizer.apply_gradients(zip(gradients, encoder_vars))
+
+                loss_metric.update_state(loss_total)
 
         @tf.function
         def train_steps(iter_, steps):
@@ -309,10 +362,15 @@ def run_unsupervised_training():
 
         logging.info("Beginning unsupervised training.")
         while True:
-            logging.info("Starting a step")
+            step = optimizer.iterations.numpy()
+            logging.info("Starting step: {}".format(step))
             train_steps(
                 dataset_iterator,
                 tf.convert_to_tensor(FLAGS.callback_frequency, dtype=tf.int32),
             )
+            write_metrics(step)
+
+            if FLAGS.max_batches and step >= FLAGS.max_batches:
+                break
 
         logging.info("Done with unsupervised training.")
