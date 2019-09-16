@@ -192,7 +192,7 @@ def _create_view(scene, seed=None):
         )
     scene = tf.nn.dropout(
         scene,
-        0.66,  # TODO(Aidan: schedule dropout
+        FLAGS.band_dropout_rate,  # TODO(Aidan): schedule dropout
         noise_shape=(csf.distribution.replica_batch_size(), 1, 1, gf.n_bands()),
         name="band_dropout",
         seed=seed,
@@ -299,7 +299,9 @@ def run_unsupervised_training():
         encoder_vars = encoder.trainable_variables
 
         # TODO(Aidan): scheduled learning rate
-        optimizer = tf.optimizers.Adam(1e-3, clipnorm=FLAGS.gradient_clipnorm)
+        optimizer = tf.optimizers.Adam(
+            FLAGS.learning_rate, clipnorm=FLAGS.gradient_clipnorm
+        )
 
         logging.debug("Building checkpoint objects.")
         ckpt = tf.train.Checkpoint(encoder=encoder, optimizer=optimizer)
@@ -327,10 +329,17 @@ def run_unsupervised_training():
             layer: tf.metrics.Mean("{}_accuracy".format(layer), tf.dtypes.float32)
             for layer in layer_loss_weights().keys()
         }
+        layer_rep_scale_metrics = {
+            layer: tf.metrics.Mean(
+                "{}_representation_size".format(layer), tf.dtypes.float32
+            )
+            for layer in layer_loss_weights().keys()
+        }
         all_metrics = (
             [loss_metric]
             + list(layer_loss_metrics.values())
             + list(layer_accuracy_metrics.values())
+            + list(layer_rep_scale_metrics.values())
         )
 
         def write_metrics(step):
@@ -360,9 +369,17 @@ def run_unsupervised_training():
 
                     for layer, weight in layers_and_weights:
                         with tf.name_scope("layer_{}".format(layer)):
-                            loss, accuracy = _contrastive_loss(
-                                representations_1[layer], representations_2[layer]
-                            )
+                            rep_1 = representations_1[layer]
+                            rep_2 = representations_2[layer]
+                            loss, accuracy = _contrastive_loss(rep_1, rep_2)
+
+                            # Plot the average 2-norm of representations
+                            with tf.name_scope("compute_scale"):
+                                rep_flat = tf.reshape(
+                                    rep_1, (csf.distribution.replica_batch_size(), -1)
+                                )
+                                rep_norms = tf.norm(rep_flat, axis=-1)
+                                layer_rep_scale_metrics[layer].update_state(rep_norms)
 
                             losses.append(weight * loss)
                             layer_loss_metrics[layer].update_state(loss)
