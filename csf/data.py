@@ -116,7 +116,6 @@ def load_dataset(input_context=None):
         options.experimental_optimization.parallel_batch = True
         options.experimental_optimization.map_fusion = True
         options.experimental_optimization.map_vectorization.enabled = False
-        options.experimental_slack = True
 
     # If input_context is not provided, the dataset will be built once and copied to
     # each replica. Sharding and distribution will be handled automatically by the
