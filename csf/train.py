@@ -153,7 +153,7 @@ def input_shape():
     )
 
 
-def _create_view(scene, seed=None):
+def _create_view(scene, dropout_rate, seed=None):
     """
     Apply augmentation to a set of input imagery, creating a new view.
     Note that this function is autograph-traced and takes a Python integer input (seed),
@@ -164,7 +164,7 @@ def _create_view(scene, seed=None):
     ----------
     scene : tf.Tensor
         A tensor of aligned input imagery.
-    dropout_rate : tf.Tensor
+    dropout_rate : None or tf.Tensor
         A scalar, float Tensor holding the current dropout rate.
         Included as an argument to work well with scheduling and autograph.
     seed : int, optional
@@ -192,7 +192,7 @@ def _create_view(scene, seed=None):
         )
     scene = tf.nn.dropout(
         scene,
-        FLAGS.band_dropout_rate,  # TODO(Aidan): schedule dropout
+        dropout_rate,
         noise_shape=(csf.distribution.replica_batch_size(), 1, 1, gf.n_bands()),
         name="band_dropout",
         seed=seed,
@@ -272,7 +272,6 @@ def _contrastive_loss(representation_1, representation_2):
     return loss, accuracy
 
 
-# TODO(Aidan): re-introduce: schedules
 def run_unsupervised_training():
     """
     Perform a full unsupervised training run programmatically.
@@ -294,14 +293,26 @@ def run_unsupervised_training():
     with csf.distribution.tpu_worker_context(), csf.distribution.distributed_context():
         tf.random.set_seed(FLAGS.random_seed)
 
+        logging.debug("Creating schedules.")
+        learning_rate = tf.Variable(
+            0.0,
+            trainable=False,
+            name="learning_rate",
+            dtype=tf.dtypes.float32,
+            aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA,
+        )
+        dropout_rate = tf.Variable(
+            0.0,
+            trainable=False,
+            name="dropout_rate_rate",
+            dtype=tf.dtypes.float32,
+            aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA,
+        )
+
         logging.debug("Building model and optimizer.")
         encoder = resnet_encoder(gf.n_bands())
         encoder_vars = encoder.trainable_variables
-
-        # TODO(Aidan): scheduled learning rate
-        optimizer = tf.optimizers.Adam(
-            FLAGS.learning_rate, clipnorm=FLAGS.gradient_clipnorm
-        )
+        optimizer = tf.optimizers.Adam(learning_rate, clipnorm=FLAGS.gradient_clipnorm)
 
         logging.debug("Building checkpoint objects.")
         ckpt = tf.train.Checkpoint(encoder=encoder, optimizer=optimizer)
@@ -344,6 +355,9 @@ def run_unsupervised_training():
 
         def write_metrics(step):
             with summary_writer.as_default():
+                tf.summary.scalar("learning_rate", learning_rate, step)
+                tf.summary.scalar("band_dropout_rate", dropout_rate, step)
+
                 for metric in all_metrics:
                     tf.summary.scalar(metric.name, metric.result(), step)
                     metric.reset_states()
@@ -357,9 +371,9 @@ def run_unsupervised_training():
             batch = tf.reshape(batch, data_shape)
             with tf.name_scope("training_step"):
                 with tf.name_scope("view_1"):
-                    view_1 = _create_view(batch, seed=1)
+                    view_1 = _create_view(batch, dropout_rate, seed=1)
                 with tf.name_scope("view_2"):
-                    view_2 = _create_view(batch, seed=2)
+                    view_2 = _create_view(batch, dropout_rate, seed=2)
 
                 losses = []
 
@@ -400,12 +414,24 @@ def run_unsupervised_training():
         while True:
             step = optimizer.iterations.numpy()
             logging.info("Starting step: {}".format(step))
+
+            learning_rate.assign(
+                csf.utils.optional_warmup(
+                    step, FLAGS.learning_rate, FLAGS.learning_rate_warmup_batches
+                )
+            )
+            dropout_rate.assign(
+                csf.utils.optional_warmup(
+                    step,
+                    FLAGS.band_dropout_rate,
+                    FLAGS.band_dropout_rate_warmup_batches,
+                )
+            )
             train_steps(
                 dataset_iterator,
                 tf.convert_to_tensor(FLAGS.callback_frequency, dtype=tf.int32),
             )
             write_metrics(step)
-
             if (step // FLAGS.callback_frequency) % FLAGS.checkpoint_frequency == 0:
                 ckpt_path = ckpt_manager.save()
                 logging.info("Saved checkpoint at path: {}.".format(ckpt_path))
