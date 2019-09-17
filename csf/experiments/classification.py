@@ -7,7 +7,7 @@ from tensorflow.keras.layers import (Concatenate, Conv2D, Dense,
 
 from csf import global_flags as gf
 from csf.experiments.data import N_OSM_LABELS, N_OSM_SAMPLES, load_osm_dataset
-from csf.experiments.utils import default_bands, encoder_head, LRMultiplierAdam
+from csf.experiments.utils import encoder_head, LRMultiplierAdam
 
 FLAGS = flags.FLAGS
 
@@ -21,7 +21,7 @@ flags.DEFINE_string(
     "osm_data_prefix", None, "Glob matching the prefix of OSM data to use."
 )
 
-flags.mark_flags_as_required(["batch_size", "checkpoint_dir", "osm_data_prefix"])
+flags.mark_flags_as_required(["checkpoint_dir", "osm_data_prefix"])
 
 # Optional parameters with sensible defaults
 flags.DEFINE_float("learning_rate", 1e-5, "Classification experiments' learning rate.")
@@ -82,8 +82,7 @@ def degrading_inputs_experiment():
         model = classification_model(
             size=128,
             n_labels=N_OSM_LABELS,
-            bands=default_bands[:n_bands],
-            batchsize=batchsize,
+            bands=FLAGS.bands[:n_bands],
             batchsize=FLAGS.batch_size,
             checkpoint_dir=FLAGS.checkpoint_dir,
         )
@@ -118,6 +117,8 @@ def degrading_inputs_experiment():
                 )
             ],
         )
+
+        print("EVAL:")
         model.evaluate(test_dataset, steps=n_test_samples // FLAGS.batch_size)
 
 
@@ -126,10 +127,7 @@ def degrading_dataset_experiment():
     for n_samples_keep in (8000, 6000, 4000, 2000, 1000, 500, 250):
         band_indices = list(range(gf.n_bands()))
 
-        # Provides 4-band SPOT, NAIP, PHR images and OSM labels:
-        #dataset = get_dataset('gs://dl-appsci/basenets/osm_data/osm_*.tfrecord', n_labels=n_labels, n_bands=n_bands)
-        # Streaming from google storage is bugging out, so we download locally first:
-        dataset = get_dataset('./osm_data/osm_*.tfrecord', n_labels=n_labels, band_indices=band_indices)
+        dataset = load_osm_dataset(FLAGS.osm_data_prefix, band_indices)
 
         n_train_samples = int(n_samples_keep * FLAGS.train_fraction)
         n_test_samples = int(n_samples_keep * FLAGS.test_fraction)
@@ -151,7 +149,7 @@ def degrading_dataset_experiment():
         model = classification_model(
             size=128,
             n_labels=N_OSM_LABELS,
-            bands=default_bands[: gf.n_bands()],
+            bands=FLAGS.bands[: gf.n_bands()],
             batchsize=FLAGS.batch_size,
             checkpoint_dir=FLAGS.checkpoint_dir,
         )
@@ -188,10 +186,5 @@ def degrading_dataset_experiment():
             ],
         )
 
-
-if __name__ == '__main__':
-    degrading_inputs_experiment()
-    degrading_dataset_experiment()
-
-    print("EVAL:")
-    model.evaluate(test_dataset, steps=n_test_samples // FLAGS.batch_size)
+        print("EVAL:")
+        model.evaluate(test_dataset, steps=n_test_samples // FLAGS.batch_size)
