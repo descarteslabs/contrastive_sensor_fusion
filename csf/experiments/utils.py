@@ -21,7 +21,7 @@ default_bands = (
 )
 
 
-def encoder_head(size, bands=None, batchsize=8, checkpoint_dir=None):
+def encoder_head(size, bands=None, batchsize=8, checkpoint_dir=None, checkpoint_file=None):
     """Useful for building a model on top of the resnet encoder.
     Adds some convenience layers to reorder bands, provide zeros
     for missing bands, and to scale up bands based on missing rate.
@@ -43,6 +43,9 @@ def encoder_head(size, bands=None, batchsize=8, checkpoint_dir=None):
         weights_path = tf.train.latest_checkpoint(checkpoint_dir)
         checkpoint = tf.train.Checkpoint(encoder=encoder)
         checkpoint.restore(weights_path).expect_partial()
+    elif checkpoint_file is not None:
+        checkpoint = tf.train.Checkpoint(encoder=encoder)
+        checkpoint.restore(checkpoint_file).expect_partial()
     encoder.trainable = False
 
     model_inputs = Input(batch_shape=(batchsize, size, size, n_bands))

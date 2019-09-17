@@ -9,14 +9,14 @@ import tensorflow.keras.backend as K
 from csf.experiments.utils import default_bands, encoder_head
 
 
-def classification_model(size, n_labels, bands=None, batchsize=8, checkpoint_dir=None):
+def classification_model(size, n_labels, bands=None, batchsize=8, checkpoint_file=None):
     """Create a model based on the trained encoder (see encoder.py)
     for classification. Can operate on any subset of products or bands. """
     model_inputs, _, encoded = encoder_head(
         size,
         bands=bands,
         batchsize=batchsize,
-        checkpoint_dir=checkpoint_dir
+        checkpoint_file=checkpoint_file
     )
 
     stack3 = encoded['conv4_block5_out']
@@ -88,13 +88,13 @@ def degrading_inputs_experiment():
         test_dataset = test_dataset.batch(batchsize).repeat()
         val_dataset = val_dataset.batch(batchsize).repeat()
 
-        checkpoint_dir = 'gs://dl-appsci/basenets/outputs/basenets_fusion_test_tf2/'
+        checkpoint_file = 'gs://dl-appsci/basenets/outputs/basenets_fusion_tpu_deploy_1/ckpt-80'
         model = classification_model(
             size=128,
             n_labels=n_labels,
             bands=default_bands[:n_bands],
             batchsize=batchsize,
-            checkpoint_dir=checkpoint_dir
+            checkpoint_file=checkpoint_file
         )
 
         model.compile(
@@ -130,7 +130,7 @@ def degrading_dataset_experiment():
     n_bands = 12
 
     # Drop dataset samples
-    for n_samples_keep in (n_total_samples // 3, 2 * n_total_samples // 3, n_total_samples):
+    for n_samples_keep in (8000, 6000, 4000, 2000, 1000, 500, 250):
         band_indices = list(range(n_bands))
 
         # Provides 4-band SPOT, NAIP, PHR images and OSM labels:
@@ -143,20 +143,20 @@ def degrading_dataset_experiment():
         n_val_samples = int(n_samples_keep * 0.1)
 
         train_dataset = dataset.take(n_train_samples)
-        test_dataset = dataset.take(n_test_samples)
-        val_dataset = dataset.take(n_val_samples)
+        test_dataset = dataset.skip(n_train_samples).take(n_test_samples)
+        val_dataset = dataset.skip(n_train_samples + n_test_samples).take(n_val_samples)
 
         train_dataset = dataset.shuffle(buffer_size=n_train_samples).batch(batchsize).repeat()
         test_dataset = test_dataset.batch(batchsize).repeat()
         val_dataset = val_dataset.batch(batchsize).repeat()
 
-        checkpoint_dir = 'gs://dl-appsci/basenets/outputs/basenets_fusion_test_tf2/'
+        checkpoint_file = 'gs://dl-appsci/basenets/outputs/basenets_fusion_tpu_deploy_1/ckpt-80'
         model = classification_model(
             size=128,
             n_labels=n_labels,
             bands=default_bands[:n_bands],
             batchsize=batchsize,
-            checkpoint_dir=checkpoint_dir
+            checkpoint_file=checkpoint_file
         )
 
         model.compile(
@@ -175,10 +175,12 @@ def degrading_dataset_experiment():
             validation_steps=n_val_samples // batchsize,
             callbacks=[
                 tf.keras.callbacks.ModelCheckpoint(
-                    'classification-%04dsample-{epoch:02d}-{val_categorical_accuracy:.4f}.h5' % (n_samples_keep,),
+                    'classification_%04dsamples_{val_categorical_accuracy:.4f}_'
+                    '{val_top_k_categorical_accuracy:.4f}_epoch{epoch:02d}.h5' % (n_samples_keep,),
                     verbose=1,
                     mode='max',
-                    save_weights_only=True
+                    save_weights_only=True,
+                    save_best_only=True
                 )
             ]
         )

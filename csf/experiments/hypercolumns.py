@@ -8,14 +8,14 @@ import tensorflow.keras.backend as K
 from csf.experiments.utils import encoder_head
 
 
-def hypercolumn_model(size, bands=None, batchsize=8, checkpoint_dir=None):
+def hypercolumn_model(size, bands=None, batchsize=8, checkpoint_file=None):
     """Create a model based on the trained encoder (see encoder.py)
     for semantic segmentation. Can operate on any subset of bands. """
     model_inputs, scaled_inputs, encoded = encoder_head(
         size,
         bands=bands,
         batchsize=batchsize,
-        checkpoint_dir=checkpoint_dir
+        checkpoint_file=checkpoint_file
     )
 
     stack1 = encoded['conv2_block2_out']
@@ -134,15 +134,15 @@ def get_dataset(remote_prefix):
         num_parallel_calls=tf.data.experimental.AUTOTUNE).unbatch()
 
 
-def sensior_fusion_experiment()
+def sensor_fusion_experiment():
     batchsize = 16
 
-    checkpoint_dir = 'gs://dl-appsci/basenets/outputs/basenets_fusion_test_tf2/'
+    checkpoint_file = 'gs://dl-appsci/basenets/outputs/basenets_fusion_tpu_deploy_1/ckpt-80'
     model = hypercolumn_model(
         size=128,
         bands=('NAIP_nir', 'NAIP_red', 'NAIP_green', 'NAIP_blue'),
         batchsize=batchsize,
-        checkpoint_dir=checkpoint_dir
+        checkpoint_file=checkpoint_file
     )
 
     model.compile(
@@ -180,6 +180,7 @@ def sensior_fusion_experiment()
             verbose=1,
             mode='max',
             save_weights_only=True,
+            save_best_only=True
         )])
     model.evaluate(test_dataset, n_test_samples // batchsize)
 
