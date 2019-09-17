@@ -2,11 +2,11 @@ import glob
 import os.path
 import subprocess as sp
 import tensorflow as tf
-from tensorflow.keras.layers import Concatenate, Conv2D, Dense, Input, Lambda, GlobalMaxPooling2D
+from tensorflow.keras.layers import Concatenate, Conv2D, Dense, Input, Lambda, GlobalMaxPooling2D, Flatten, GlobalAveragePooling2D
 from tensorflow.keras import Model
 import tensorflow.keras.backend as K
 
-from csf.experiments.utils import default_bands, encoder_head
+from csf.experiments.utils import default_bands, encoder_head, LRMultiplierAdam
 
 
 def classification_model(size, n_labels, bands=None, batchsize=8, checkpoint_file=None):
@@ -16,7 +16,8 @@ def classification_model(size, n_labels, bands=None, batchsize=8, checkpoint_fil
         size,
         bands=bands,
         batchsize=batchsize,
-        checkpoint_file=checkpoint_file
+        checkpoint_file=checkpoint_file,
+        trainable=True
     )
 
     stack3 = encoded['conv4_block5_out']
@@ -27,10 +28,15 @@ def classification_model(size, n_labels, bands=None, batchsize=8, checkpoint_fil
 
     pooled3 = GlobalMaxPooling2D()(conv3)
     pooled4 = GlobalMaxPooling2D()(conv4)
-
     cat = Concatenate(axis=-1)([pooled3, pooled4])
-    dense = Dense(units=1000, activation='relu')(cat)
-    out = Dense(units=n_labels, activation='sigmoid')(dense)
+
+    #flat3 = Flatten()(conv3)
+    #flat4 = Flatten()(conv4)
+    #cat = Concatenate(axis=-1)([flat3, flat4])
+
+    #dense = Dense(units=1000, activation='relu')(cat)
+    dense = cat
+    out = Dense(units=n_labels, activation='softmax', name='dense1')(dense)
 
     return Model(inputs=model_inputs, outputs=[out])
 
@@ -98,7 +104,11 @@ def degrading_inputs_experiment():
         )
 
         model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5, clipnorm=1.0),
+            optimizer=LRMultiplierAdam(
+                learning_rate=1e-6,
+                clipnorm=1.0,
+                multipliers={"dense1": 10.0}
+            ),
             loss=tf.keras.losses.CategoricalCrossentropy(),
             metrics=[tf.keras.metrics.CategoricalAccuracy(),
                      tf.keras.metrics.TopKCategoricalAccuracy(k=2),
@@ -113,7 +123,8 @@ def degrading_inputs_experiment():
             validation_steps=n_val_samples // batchsize,
             callbacks=[
                 tf.keras.callbacks.ModelCheckpoint(
-                    'classification-%02dband-{epoch:02d}-{val_categorical_accuracy:.4f}.h5' % (n_bands,),
+                    'classification_%02dband_{val_categorical_accuracy:.4f}_'
+                    '{val_top_k_categorical_accuracy:.4f}_epoch{epoch:02d}.h5' % (n_bands,),
                     verbose=1,
                     mode='max',
                     save_weights_only=True
@@ -188,5 +199,5 @@ def degrading_dataset_experiment():
 
 
 if __name__ == '__main__':
-    #degrading_inputs_experiment()
-    degrading_dataset_experiment()
+    degrading_inputs_experiment()
+    #degrading_dataset_experiment()
