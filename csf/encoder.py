@@ -39,5 +39,4 @@ def resnet_encoder(n_input_bands, weights=None):
         layer: model_base.get_layer(layer).output
         for layer in RESNET_REPRESENTATION_LAYERS
     }
-    model = tf.keras.Model(inputs=model_base.input, outputs=out_tensors)
-    return model
+    return tf.keras.Model(inputs=model_base.input, outputs=out_tensors, name='encoder')
