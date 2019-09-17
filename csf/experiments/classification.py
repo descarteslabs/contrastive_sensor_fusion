@@ -90,9 +90,9 @@ def degrading_inputs_experiment():
         test_dataset = dataset.take(n_test_samples)
         val_dataset = dataset.take(n_val_samples)
 
-        train_dataset = dataset.shuffle(buffer_size=n_train_samples).batch(batchsize).repeat()
-        test_dataset = test_dataset.batch(batchsize).repeat()
-        val_dataset = val_dataset.batch(batchsize).repeat()
+        train_dataset = dataset.shuffle(buffer_size=n_train_samples).batch(batchsize, drop_remainder=True).repeat()
+        test_dataset = test_dataset.batch(batchsize, drop_remainder=True).repeat()
+        val_dataset = val_dataset.batch(batchsize, drop_remainder=True).repeat()
 
         checkpoint_file = '***REMOVED***outputs/basenets_fusion_tpu_deploy_1/ckpt-80'
         model = classification_model(
@@ -126,6 +126,7 @@ def degrading_inputs_experiment():
                     'classification_%02dband_{val_categorical_accuracy:.4f}_'
                     '{val_top_k_categorical_accuracy:.4f}_epoch{epoch:02d}.h5' % (n_bands,),
                     verbose=1,
+                    monitor='val_categorical_accuracy',
                     mode='max',
                     save_weights_only=True
                 )
@@ -157,9 +158,9 @@ def degrading_dataset_experiment():
         test_dataset = dataset.skip(n_train_samples).take(n_test_samples)
         val_dataset = dataset.skip(n_train_samples + n_test_samples).take(n_val_samples)
 
-        train_dataset = dataset.shuffle(buffer_size=n_train_samples).batch(batchsize).repeat()
-        test_dataset = test_dataset.batch(batchsize).repeat()
-        val_dataset = val_dataset.batch(batchsize).repeat()
+        train_dataset = dataset.shuffle(buffer_size=n_train_samples).batch(batchsize, drop_remainder=True).repeat()
+        test_dataset = test_dataset.batch(batchsize, drop_remainder=True).repeat()
+        val_dataset = val_dataset.batch(batchsize, drop_remainder=True).repeat()
 
         checkpoint_file = '***REMOVED***outputs/basenets_fusion_tpu_deploy_1/ckpt-80'
         model = classification_model(
@@ -190,6 +191,7 @@ def degrading_dataset_experiment():
                     '{val_top_k_categorical_accuracy:.4f}_epoch{epoch:02d}.h5' % (n_samples_keep,),
                     verbose=1,
                     mode='max',
+                    monitor='val_categorical_accuracy',
                     save_weights_only=True,
                     save_best_only=True
                 )
@@ -200,4 +202,4 @@ def degrading_dataset_experiment():
 
 if __name__ == '__main__':
     degrading_inputs_experiment()
-    #degrading_dataset_experiment()
+    degrading_dataset_experiment()
