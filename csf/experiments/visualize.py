@@ -5,8 +5,8 @@ import matplotlib as mpl
 mpl.use('Agg')
 import matplotlib.pyplot as plt
 
-#import tensorflow as tf
-#assert tf.__version__.split('.', 1)[0] == '1', tf.__version__
+import tensorflow as tf
+assert tf.__version__.split('.', 1)[0] == '1', tf.__version__
 
 import keras
 import keras.backend as K
@@ -29,7 +29,7 @@ transforms = [
 batchsize = 1
 size = 128
 
-weightsfile = 'ckpt-80.h5'
+weightsfile = 'ckpt.h5'
 
 # Load tf.keras weights into keras model for using lucid4keras.
 model_base = keras.applications.ResNet50V2(
