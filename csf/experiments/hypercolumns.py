@@ -1,18 +1,19 @@
-import subprocess as sp
-
 import tensorflow as tf
 import tensorflow.keras.backend as K
 from absl import flags
 from tensorflow.keras import Model
 from tensorflow.keras.layers import Concatenate, Conv2D, UpSampling2D
 
+from csf.experiments.data import (N_BUILDINGS_TEST_SAMPLES,
+                                  N_BUILDINGS_TRAIN_SAMPLES,
+                                  N_BUILDINGS_VAL_SAMPLES,
+                                  load_buildings_dataset)
 from csf.experiments.utils import encoder_head
 
 FLAGS = flags.FLAGS
 
 # Required parameters
 flags.DEFINE_integer("epochs", None, "Numer of epochs to train experiment for.")
-flags.DEFINE_integer("initial_tilesize", None, "Size of the raw data tiles.")
 flags.DEFINE_integer(
     "target_tilesize",
     None,
@@ -29,10 +30,6 @@ flags.DEFINE_string("train_dataset", None, "Glob to tfrecords used for training.
 flags.DEFINE_string("val_dataset", None, "Glob to tfrecords used for validation.")
 flags.DEFINE_string("test_dataset", None, "Glob to tfrecords used for testing.")
 
-flags.DEFINE_integer("n_train_samples", None, "Number of samples used for training.")
-flags.DEFINE_integer("n_val_samples", None, "Number of samples used for validation.")
-flags.DEFINE_integer("n_test_samples", None, "Number of samples used for testing.")
-
 # Optional parameters, with sensible defaults.
 flags.DEFINE_float("learning_rate", 1e-4, "Hypercolumn experiments' learning rate.")
 flags.DEFINE_integer("batch_size", 16, "Batch size for hypercolumn experiments.")
@@ -40,16 +37,12 @@ flags.DEFINE_integer("batch_size", 16, "Batch size for hypercolumn experiments."
 flags.mark_flags_as_required(
     [
         "epochs",
-        "initial_tilesize",
         "target_tilesize",
         "checkpoint_dir",
         "experiment_bands",
         "train_dataset",
         "val_dataset",
         "test_dataset",
-        "n_train_samples",
-        "n_val_samples",
-        "n_test_samples",
     ]
 )
 
@@ -126,82 +119,6 @@ def f1_metric(y_true, y_pred):
     return 2 * (precision * recall) / (precision + recall + K.epsilon())
 
 
-def get_dataset(remote_prefix):
-    features = {
-        "image/height": tf.io.FixedLenFeature([], tf.int64),
-        "image/width": tf.io.FixedLenFeature([], tf.int64),
-        "image/channels": tf.io.FixedLenFeature([], tf.int64),
-        "image/colorspace": tf.io.FixedLenFeature([], tf.string),
-        "image/format": tf.io.FixedLenFeature([], tf.string),
-        "image/filename": tf.io.FixedLenFeature([], tf.string),
-        "image/image_data": tf.io.FixedLenSequenceFeature(
-            [], dtype=tf.float32, allow_missing=True
-        ),
-        "target/height": tf.io.FixedLenFeature([], tf.int64),
-        "target/width": tf.io.FixedLenFeature([], tf.int64),
-        "target/channels": tf.io.FixedLenFeature([], tf.int64),
-        "target/target_data": tf.io.FixedLenSequenceFeature(
-            [], dtype=tf.float32, allow_missing=True
-        ),
-    }
-
-    input_shape = (
-        FLAGS.initial_tilesize,
-        FLAGS.initial_tilesize,
-        len(FLAGS.experiment_bands),
-    )
-    target_shape = (FLAGS.initial_tilesize, FLAGS.initial_tilesize, 1)
-
-    # We need to upsample NAIP to the target resolution of 0.5m from 1.0m
-    upsample_size = 2 * FLAGS.initial_tilesize
-
-    def _parse_image_function(example_proto):
-        example_features = tf.io.parse_single_example(example_proto, features)
-        image = tf.reshape(example_features["image/image_data"], input_shape)
-        target = tf.reshape(example_features["target/target_data"], target_shape)
-        image /= 128.0
-        image -= 1.0
-        image = tf.image.resize(
-            image, size=(upsample_size, upsample_size), method="bilinear"
-        )
-        target = tf.image.resize(
-            target, size=(upsample_size, upsample_size), method="bilinear"
-        )
-        images = list()
-        targets = list()
-        for j in range(upsample_size // FLAGS.target_tilesize):
-            for i in range(upsample_size // FLAGS.target_tilesize):
-                images.append(
-                    image[
-                        j * FLAGS.target_tilesize : (j + 1) * FLAGS.target_tilesize,
-                        i * FLAGS.target_tilesize : (i + 1) * FLAGS.target_tilesize,
-                        :,
-                    ]
-                )
-                targets.append(
-                    target[
-                        j * FLAGS.target_tilesize : (j + 1) * FLAGS.target_tilesize,
-                        i * FLAGS.target_tilesize : (i + 1) * FLAGS.target_tilesize,
-                        :,
-                    ]
-                )
-        images = tf.data.Dataset.from_tensors(images)
-        targets = tf.data.Dataset.from_tensors(targets)
-        return tf.data.Dataset.zip((images, targets))
-
-    tfrecord_paths = (
-        sp.check_output(("gsutil", "-m", "ls", remote_prefix))
-        .decode("ascii")
-        .split("\n")
-    )
-    dataset = tf.data.TFRecordDataset(tfrecord_paths)
-    return dataset.interleave(
-        _parse_image_function,
-        cycle_length=tf.data.experimental.AUTOTUNE,
-        num_parallel_calls=tf.data.experimental.AUTOTUNE,
-    ).unbatch()
-
-
 def sensior_fusion_experiment():
     model = hypercolumn_model(
         size=128,
@@ -224,9 +141,15 @@ def sensior_fusion_experiment():
     )
 
     # Provides 4-band NAIP images and targets:
-    train_dataset = get_dataset(FLAGS.train_dataset)
-    val_dataset = get_dataset(FLAGS.val_dataset)
-    test_dataset = get_dataset(FLAGS.test_dataset)
+    train_dataset = load_buildings_dataset(
+        FLAGS.train_dataset, N_BUILDINGS_TRAIN_SAMPLES, FLAGS.experiment_bands
+    )
+    val_dataset = load_buildings_dataset(
+        FLAGS.val_dataset, N_BUILDINGS_VAL_SAMPLES, FLAGS.experiment_bands
+    )
+    test_dataset = load_buildings_dataset(
+        FLAGS.test_dataset, N_BUILDINGS_TEST_SAMPLES, FLAGS.experiment_bands
+    )
 
     train_dataset = train_dataset.shuffle(buffer_size=750).batch(FLAGS.batch_size)
     val_dataset = val_dataset.batch(FLAGS.batch_size)
@@ -235,9 +158,9 @@ def sensior_fusion_experiment():
     model.fit(
         train_dataset,
         epochs=FLAGS.epochs,
-        steps_per_epoch=FLAGS.n_train_samples // FLAGS.batch_size,
+        steps_per_epoch=N_BUILDINGS_TRAIN_SAMPLES // FLAGS.batch_size,
         validation_data=val_dataset,
-        validation_steps=FLAGS.n_val_samples // FLAGS.batch_size,
+        validation_steps=N_BUILDINGS_VAL_SAMPLES // FLAGS.batch_size,
         callbacks=[
             tf.keras.callbacks.ModelCheckpoint(
                 "hypercolumns-{epoch:02d}-{val_f1_metric:.4f}.h5",
@@ -247,7 +170,7 @@ def sensior_fusion_experiment():
             )
         ],
     )
-    model.evaluate(test_dataset, FLAGS.n_test_samples // FLAGS.batch_size)
+    model.evaluate(test_dataset, N_BUILDINGS_TEST_SAMPLES // FLAGS.batch_size)
 
 
 def imagenet_comparison_experiment():

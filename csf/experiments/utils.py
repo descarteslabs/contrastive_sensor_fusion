@@ -3,25 +3,10 @@ import tensorflow.keras.backend as K
 from absl import flags
 from tensorflow.keras.layers import Concatenate, Input, Lambda
 
-import csf.global_flags  # noqa
+import csf.global_flags as gf
 from csf.encoder import resnet_encoder
 
 FLAGS = flags.FLAGS
-
-default_bands = (
-    "SPOT_red",
-    "SPOT_green",
-    "SPOT_blue",
-    "SPOT_nir",
-    "NAIP_red",
-    "NAIP_green",
-    "NAIP_blue",
-    "NAIP_nir",
-    "PHR_red",
-    "PHR_green",
-    "PHR_blue",
-    "PHR_nir",
-)
 
 
 def encoder_head(size, bands=None, batchsize=8, checkpoint_dir=None):
@@ -32,10 +17,9 @@ def encoder_head(size, bands=None, batchsize=8, checkpoint_dir=None):
     you may choose to ignore, and 3. the encoder outputs."""
 
     if bands is None:
-        bands = default_bands
+        bands = FLAGS.bands
 
     n_bands = len(bands)
-    n_default_bands = len(default_bands)
 
     if n_bands <= 0:
         raise ValueError("You must provide some bands")
@@ -53,7 +37,7 @@ def encoder_head(size, bands=None, batchsize=8, checkpoint_dir=None):
     # Reorganize the present inputs according to the order given
     to_concat = list()
     band_i = 0
-    for default_band in default_bands:
+    for default_band in FLAGS.bands:
         try:
             band_i = bands.index(default_band)
         except ValueError:
@@ -63,7 +47,7 @@ def encoder_head(size, bands=None, batchsize=8, checkpoint_dir=None):
     all_inputs = Concatenate(axis=-1)(to_concat)
 
     # Multiply inputs according to missing bands
-    scaled_inputs = Lambda(lambda x: x * n_default_bands / n_bands)(all_inputs)
+    scaled_inputs = Lambda(lambda x: x * gf.n_bands() / n_bands)(all_inputs)
     encoded = encoder(scaled_inputs)
 
     return model_inputs, scaled_inputs, encoded
