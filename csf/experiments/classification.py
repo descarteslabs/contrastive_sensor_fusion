@@ -58,16 +58,11 @@ def degrading_inputs_experiment():
     for n_bands in range(gf.n_bands(), 0, -1):
         band_indices = list(range(n_bands))
 
-        # Provides 4-band SPOT, NAIP, PHR images and OSM labels:
-        # dataset = get_dataset('***REMOVED***',
-        #                       n_labels=n_labels, n_bands=n_bands)
-        # Streaming from google storage is bugging out, so we download locally first:
-        dataset = load_osm_dataset(FLAGS.osm_data_prefix, band_indices)
-
         n_train_samples = int(N_OSM_SAMPLES * FLAGS.train_fraction)
         n_test_samples = int(N_OSM_SAMPLES * FLAGS.test_fraction)
         n_val_samples = int(N_OSM_SAMPLES * FLAGS.val_fraction)
 
+        dataset = load_osm_dataset(FLAGS.osm_data_prefix, band_indices)
         train_dataset = dataset.take(n_train_samples)
         test_dataset = dataset.take(n_test_samples)
         val_dataset = dataset.take(n_val_samples)
@@ -123,16 +118,11 @@ def degrading_dataset_experiment():
     for n_samples_keep in (N_OSM_SAMPLES // 3, 2 * N_OSM_SAMPLES // 3, N_OSM_SAMPLES):
         band_indices = list(range(gf.n_bands()))
 
-        # Provides 4-band SPOT, NAIP, PHR images and OSM labels:
-        # dataset = get_dataset('***REMOVED***',
-        #           n_labels=n_labels, n_bands=n_bands)
-        # Streaming from google storage is bugging out, so we download locally first:
-        dataset = load_osm_dataset(FLAGS.osm_data_prefix, band_indices=band_indices)
-
         n_train_samples = int(n_samples_keep * FLAGS.train_fraction)
         n_test_samples = int(n_samples_keep * FLAGS.test_fraction)
         n_val_samples = int(n_samples_keep * FLAGS.val_fraction)
 
+        dataset = load_osm_dataset(FLAGS.osm_data_prefix, band_indices=band_indices)
         train_dataset = dataset.take(n_train_samples)
         test_dataset = dataset.take(n_test_samples)
         val_dataset = dataset.take(n_val_samples)
