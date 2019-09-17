@@ -126,7 +126,7 @@ def _save_txt(projection, labels, savedir):
     for i, label in enumerate(OSM_CLASSES):
         points = projection[np.where(labels == i)[0], :]
         np.savetxt(
-            os.path.join(savedir, "{}.txt".format(label.replace(" ", "_"))), points
+            os.path.join(savedir, "{}.data".format(label.replace(" ", "_"))), points
         )
 
 
@@ -148,7 +148,7 @@ def _load_txt(savedir):
     projection = []
     for i, label in enumerate(OSM_CLASSES):
         points = np.loadtxt(
-            os.path.join(savedir, "{}.txt".format(label.replace(" ", "_")))
+            os.path.join(savedir, "{}.data".format(label.replace(" ", "_")))
         )
         labels.extend([i] * len(points))
         projection.extend(points)
