@@ -58,6 +58,7 @@ def load_osm_dataset(remote_prefix, band_indices):
         target = tf.reshape(
             tf.one_hot(example_features["label"], depth=N_OSM_LABELS), target_shape
         )
+        image = (tf.cast(image, tf.dtypes.float32) / 128.0) - 1.0
         return image, target
 
     if remote_prefix.startswith("gs://"):
@@ -122,8 +123,7 @@ def load_buildings_dataset(remote_prefix, target_tilesize, experiment_bands):
         example_features = tf.io.parse_single_example(example_proto, features)
         image = tf.reshape(example_features["image/image_data"], input_shape)
         target = tf.reshape(example_features["target/target_data"], target_shape)
-        image /= 128.0
-        image -= 1.0
+        image = (tf.cast(image, tf.dtypes.float32) / 128.0) - 1.0
         image = tf.image.resize(
             image, size=(upsample_size, upsample_size), method="bilinear"
         )
@@ -158,8 +158,6 @@ def load_buildings_dataset(remote_prefix, target_tilesize, experiment_bands):
         .split("\n")
     )
     dataset = tf.data.TFRecordDataset(tfrecord_paths)
-    return dataset.interleave(
-        _parse_image_function,
-        cycle_length=tf.data.experimental.AUTOTUNE,
-        num_parallel_calls=tf.data.experimental.AUTOTUNE,
-    ).unbatch()
+    return dataset.map(
+        _parse_image_function, num_parallel_calls=tf.data.experimental.AUTOTUNE
+    )
