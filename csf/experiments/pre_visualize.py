@@ -1,3 +1,5 @@
+"""Prepare tensorflow 2.0 keras encoder weights for tensorflow 1.0 keras"""
+
 import numpy as np
 import os.path
 
