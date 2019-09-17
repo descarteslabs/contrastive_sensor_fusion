@@ -13,6 +13,20 @@ from csf import global_flags as gf
 OSM_TILESIZE = 128
 N_OSM_LABELS = 12
 N_OSM_SAMPLES = 8600
+OSM_CLASSES = [
+    "Bridge",
+    "Breakwater",
+    "Farm",
+    "Substation",
+    "Stadium",
+    "Golf course",
+    "Dam",
+    "Quarry",
+    "Farmland",
+    "Forest",
+    "Water",
+    "Bare rock",
+]
 
 BUILDINGS_TILESIZE = 512
 N_BUILDINGS_TRAIN_SAMPLES = 12000
