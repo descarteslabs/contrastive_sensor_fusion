@@ -5,17 +5,19 @@ from tensorflow.keras.layers import Activation, Add, Concatenate, Conv2D, Input,
 from tensorflow.keras import Model
 import tensorflow.keras.backend as K
 
-from csf.experiments.utils import encoder_head
+from csf.experiments.utils import encoder_head, LRMultiplierAdam
 
 
-def hypercolumn_model(size, bands=None, batchsize=8, checkpoint_file=None):
+def hypercolumn_model(size, bands=None, batchsize=8, checkpoint_file=None, checkpoint_dir=None):
     """Create a model based on the trained encoder (see encoder.py)
     for semantic segmentation. Can operate on any subset of bands. """
     model_inputs, scaled_inputs, encoded = encoder_head(
         size,
         bands=bands,
         batchsize=batchsize,
-        checkpoint_file=checkpoint_file
+        checkpoint_file=checkpoint_file,
+        checkpoint_dir=checkpoint_dir,
+        trainable=True
     )
 
     stack1 = encoded['conv2_block2_out']
@@ -30,36 +32,44 @@ def hypercolumn_model(size, bands=None, batchsize=8, checkpoint_file=None):
     up4 = UpSampling2D(size=(128 // 4), interpolation='bilinear')(stack4)
 
     cat = Concatenate(axis=-1)([up0, up1, up2, up3, up4])
-    conv = Conv2D(filters=1000, kernel_size=1, activation='relu')(cat)
-    out = Conv2D(filters=1, kernel_size=1, activation='sigmoid')(conv)
+    #conv = Conv2D(filters=1000, kernel_size=1, activation='relu')(cat)
+    conv = cat
+    out = Conv2D(filters=1, kernel_size=1, activation='sigmoid', name='dense1')(conv)
 
     return Model(inputs=model_inputs, outputs=[out])
 
 
-def edge_weighted_binary_crossentropy(
-        y_true,
-        y_pred,
-        edge_weight=2.0,
-        interior_weight=1.0,
-        exterior_weight=0.5
-    ):
-    dilation = tf.nn.max_pool2d(y_true, ksize=3, strides=1, padding='SAME')
-    interior = 1.0 - tf.nn.max_pool2d(1.0 - y_true, ksize=3, strides=1, padding='SAME')
-    edge = dilation - interior
-    exterior = 1.0 - dilation
+def boundary_loss(y_true, y_pred):
+    true_dilation = tf.nn.max_pool2d(y_true, ksize=3, strides=1, padding='SAME')
+    true_interior = 1.0 - tf.nn.max_pool2d(1.0 - y_true, ksize=3, strides=1, padding='SAME')
+    true_edge = true_dilation - true_interior
+    true_extended = tf.nn.max_pool2d(true_edge, ksize=3, strides=1, padding='SAME')
 
-    true_at_edge = y_true * edge
-    true_at_interior = y_true * interior
-    true_at_exterior = y_true * exterior
+    pred_dilation = tf.nn.max_pool2d(y_pred, ksize=3, strides=1, padding='SAME')
+    pred_interior = 1.0 - tf.nn.max_pool2d(1.0 - y_pred, ksize=3, strides=1, padding='SAME')
+    pred_edge = true_dilation - true_interior
+    pred_extended = tf.nn.max_pool2d(true_edge, ksize=3, strides=1, padding='SAME')
 
-    edge_loss = tf.keras.losses.binary_crossentropy(true_at_edge, y_pred * edge)
-    interior_loss = tf.keras.losses.binary_crossentropy(true_at_interior, y_pred * interior)
-    exterior_loss = tf.keras.losses.binary_crossentropy(true_at_exterior, y_pred * exterior)
+    y_pred_edge = y_pred * pred_edge
+    y_true_edge = y_true * true_edge
+    precision = tf.reduce_sum(y_true * true_extended * y_pred * pred_edge) / (tf.reduce_sum(y_pred_edge) + K.epsilon())
+    recall = tf.reduce_sum(y_true_edge * y_pred * pred_extended) / (tf.reduce_sum(y_true_edge) + K.epsilon())
 
+    return 1.0 - 2.0 * precision * recall / (K.epsilon() + precision + recall)
+
+
+def jaccard_loss(y_true, y_pred, smooth=1.0):
+    intersection = K.sum(K.abs(y_true * y_pred), axis=-1)
+    sum_ = K.sum(K.abs(y_true) + K.abs(y_pred), axis=-1)
+    jac = (intersection + smooth) / (sum_ - intersection + smooth)
+    return (1.0 - jac) * smooth
+
+
+def weighted_boundary_loss(y_true, y_pred, weight=0.5):
+    """Weighted average of boundary loss and jaccard (IoU) loss"""
     return (
-        edge_weight * edge_loss +
-        interior_weight * interior_loss +
-        exterior_weight * exterior_loss
+        weight * boundary_loss(y_true, y_pred) +
+        (1.0 - weight) * jaccard_loss(y_true, y_pred)
     )
 
 
@@ -135,19 +145,25 @@ def get_dataset(remote_prefix):
 
 
 def sensor_fusion_experiment():
-    batchsize = 16
+    batchsize = 8
 
-    checkpoint_file = 'gs://dl-appsci/basenets/outputs/basenets_fusion_tpu_deploy_1/ckpt-80'
+    #checkpoint_file = 'gs://dl-appsci/basenets/outputs/basenets_fusion_tpu_deploy_1/ckpt-80'
+    checkpoint_dir = 'gs://dl-appsci/basenets/outputs/basenets_fusion_tpu_deploy_2' # later?
     model = hypercolumn_model(
         size=128,
         bands=('NAIP_nir', 'NAIP_red', 'NAIP_green', 'NAIP_blue'),
         batchsize=batchsize,
-        checkpoint_file=checkpoint_file
+        #checkpoint_file=checkpoint_file,
+        checkpoint_dir=checkpoint_dir
     )
 
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4, clipnorm=1.0),
-        loss=edge_weighted_binary_crossentropy,
+        optimizer=LRMultiplierAdam(
+            learning_rate=1e-6,
+            clipnorm=1.0,
+            multipliers={"dense1": 10.0}
+        ),
+        loss=weighted_boundary_loss,
         metrics=[
             tf.keras.metrics.BinaryAccuracy(),
             tf.keras.metrics.Precision(),
