@@ -9,8 +9,29 @@ from csf.encoder import resnet_encoder
 
 FLAGS = flags.FLAGS
 
+default_bands = (
+    'SPOT_red',
+    'SPOT_green',
+    'SPOT_blue',
+    'SPOT_nir',
+    'NAIP_red',
+    'NAIP_green',
+    'NAIP_blue',
+    'NAIP_nir',
+    'PHR_red',
+    'PHR_green',
+    'PHR_blue',
+    'PHR_nir',
+)
 
-def encoder_head(size, bands=None, batchsize=8, checkpoint_dir=None, checkpoint_file=None, trainable=False):
+def encoder_head(
+    size,
+    bands=None,
+    batchsize=8,
+    checkpoint_dir=None,
+    checkpoint_file=None,
+    trainable=False
+):
     """Useful for building a model on top of the resnet encoder.
     Adds some convenience layers to reorder bands, provide zeros
     for missing bands, and to scale up bands based on missing rate.
@@ -27,9 +48,11 @@ def encoder_head(size, bands=None, batchsize=8, checkpoint_dir=None, checkpoint_
 
     # Load upstream weights into encoder
     if checkpoint_dir == 'imagenet' or checkpoint_file == 'imagenet':
-        encoder = resnet_encoder(n_input_bands=12, weights='imagenet')
+        n_input_bands = 3
+        encoder = resnet_encoder(n_input_bands, weights='imagenet')
     else:
-        encoder = resnet_encoder(n_input_bands=12)
+        n_input_bands = 12
+        encoder = resnet_encoder(n_input_bands)
         if checkpoint_dir is not None:
             weights_path = tf.train.latest_checkpoint(checkpoint_dir)
             checkpoint = tf.train.Checkpoint(encoder=encoder)
@@ -43,14 +66,22 @@ def encoder_head(size, bands=None, batchsize=8, checkpoint_dir=None, checkpoint_
 
     # Reorganize the present inputs according to the order given
     to_concat = list()
-    band_i = 0
-    for default_band in FLAGS.bands:
-        try:
-            band_i = bands.index(default_band)
-        except ValueError:
-            to_concat.append(K.zeros(shape=(batchsize, size, size, 1)))
-        else:
-            to_concat.append(K.expand_dims(model_inputs[..., band_i], axis=-1))
+    if n_input_bands == 12:
+        for default_band in default_bands:
+            try:
+                band_i = bands.index(default_band)
+            except ValueError:
+                to_concat.append(K.zeros(shape=(batchsize, size, size, 1)))
+            else:
+                to_concat.append(K.expand_dims(model_inputs[..., band_i], axis=-1))
+    else:
+        for rgb_band in ('red', 'green', 'blue'):
+            for band_i, band in enumerate(bands):
+                if band.endswith(rgb_band):
+                    to_concat.append(K.expand_dims(model_inputs[..., band_i], axis=-1))
+                    break
+            else:
+                to_concat.append(K.zeros(shape=(batchsize, size, size, 1)))
     all_inputs = Concatenate(axis=-1)(to_concat)
 
     # Multiply inputs according to missing bands
