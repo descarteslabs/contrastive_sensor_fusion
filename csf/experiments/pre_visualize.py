@@ -20,7 +20,7 @@ model_base = tf.keras.applications.ResNet50V2(
     weights=None,
 )
 
-checkpoint_file = tf.train.latest_checkpoint('***REMOVED***outputs/basenets_fusion_tpu_deploy_2/')
+checkpoint_file = tf.train.latest_checkpoint('***REMOVED***outputs/basenets_fusion_basenets_fusion_tpu_deploy_2/')
 checkpoint = tf.train.Checkpoint(encoder=model_base)
 checkpoint.restore(checkpoint_file).expect_partial()
 

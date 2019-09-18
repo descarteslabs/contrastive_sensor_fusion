@@ -66,17 +66,21 @@ model_stack3 = Model(
     outputs=model_base_stack3(base_inputs_stack3)
 )
 
-for index in range(1024):
-    objective = channel(index)
-    im = keras_render_vis(model_stack3, objective, transforms=transforms, param_f=param_f, thresholds=[2560], lr=0.01)
-    im = np.squeeze(im)
-    im -= im.min(axis=(0, 1), keepdims=True)
-    im /= im.max(axis=(0, 1), keepdims=True)
-    plt.imshow(im)
-    filename = 'vis_stack3_%04i.png' % (index,)
-    print("Saving", filename)
-    plt.savefig(filename)
-    plt.clf()
+try:
+    print("Optimizing stack 3")
+    for index in range(1024):
+        objective = channel(index)
+        im = keras_render_vis(model_stack3, objective, transforms=transforms, param_f=param_f, thresholds=[2560], lr=0.01)
+        im = np.squeeze(im)
+        im -= im.min(axis=(0, 1), keepdims=True)
+        im /= im.max(axis=(0, 1), keepdims=True)
+        plt.imshow(im)
+        filename = 'vis_stack3_%04i.png' % (index,)
+        print("Saving", filename)
+        plt.savefig(filename)
+        plt.clf()
+except KeyboardInterrupt:
+    pass
 
 model_base_stack4 = prepare_model(model_base, layer_name="conv5_block3_out")
 inputs_stack4 = Input(batch_shape=(batchsize, size, size, 3))
@@ -86,6 +90,7 @@ model_stack4 = Model(
     outputs=model_base_stack4(base_inputs_stack4)
 )
 
+print("Optimizing stack 4")
 for index in range(2048):
     objective = channel(index)
     im = keras_render_vis(model_stack4, objective, transforms=transforms, param_f=param_f, thresholds=[2560], lr=0.02)
