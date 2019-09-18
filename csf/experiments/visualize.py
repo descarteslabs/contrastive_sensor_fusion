@@ -30,6 +30,9 @@ batchsize = 1
 size = 128
 
 weightsfile = 'ckpt.h5'
+if not os.path.isfile(weightsfile):
+    raise RuntimeError("Run pre_visualize.py first, in a tensorflow 2.x "
+                       "environment, to generate ckpt.h5")
 
 # Load tf.keras weights into keras model for using lucid4keras.
 model_base = keras.applications.ResNet50V2(
