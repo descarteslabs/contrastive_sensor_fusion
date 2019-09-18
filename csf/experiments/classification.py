@@ -13,7 +13,7 @@ FLAGS = flags.FLAGS
 
 # Required parameters for all experiments
 flags.DEFINE_string(
-    "checkpoint_dir",
+    "checkpoint_file",
     None,
     "Path to directory to load unsupervised weights from and save results to.",
 )
@@ -21,7 +21,7 @@ flags.DEFINE_string(
     "osm_data_prefix", None, "Glob matching the prefix of OSM data to use."
 )
 
-flags.mark_flags_as_required(["checkpoint_dir", "osm_data_prefix"])
+flags.mark_flags_as_required(["checkpoint_file", "osm_data_prefix"])
 
 # Optional parameters with sensible defaults
 flags.DEFINE_float("learning_rate", 1e-5, "Classification experiments' learning rate.")
@@ -31,7 +31,7 @@ flags.DEFINE_float("test_fraction", 0.1, "Fraction of OSM data used for testing.
 flags.DEFINE_float("val_fraction", 0.1, "Fraction of OSM data used for validation.")
 
 
-def classification_model(size, n_labels, bands=None, batchsize=8, checkpoint_file=None, checkpoint_dir=None):
+def classification_model(size, n_labels, bands=None, batchsize=8, checkpoint_file=None):
     """Create a model based on the trained encoder (see encoder.py)
     for classification. Can operate on any subset of products or bands. """
     model_inputs, _, encoded = encoder_head(
@@ -39,7 +39,6 @@ def classification_model(size, n_labels, bands=None, batchsize=8, checkpoint_fil
         bands=bands,
         batchsize=batchsize,
         checkpoint_file=checkpoint_file,
-        checkpoint_dir=checkpoint_dir,
         trainable=True
     )
 
@@ -84,7 +83,7 @@ def degrading_inputs_experiment():
             n_labels=N_OSM_LABELS,
             bands=FLAGS.bands[:n_bands],
             batchsize=FLAGS.batch_size,
-            checkpoint_dir=FLAGS.checkpoint_dir,
+            checkpoint_file=FLAGS.checkpoint_file,
         )
 
         model.compile(
@@ -151,7 +150,7 @@ def degrading_dataset_experiment():
             n_labels=N_OSM_LABELS,
             bands=FLAGS.bands[: gf.n_bands()],
             batchsize=FLAGS.batch_size,
-            checkpoint_dir=FLAGS.checkpoint_dir,
+            checkpoint_file=FLAGS.checkpoint_file,
         )
 
         model.compile(
