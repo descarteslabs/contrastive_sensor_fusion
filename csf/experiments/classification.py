@@ -71,7 +71,7 @@ def degrading_inputs_experiment():
         val_dataset = dataset.skip(n_train_samples + n_test_samples).take(n_val_samples)
 
         train_dataset = (
-            dataset.shuffle(buffer_size=n_train_samples)
+            train_dataset.shuffle(buffer_size=n_train_samples)
             .batch(FLAGS.batch_size, drop_remainder=True)
             .repeat()
         )
@@ -138,7 +138,7 @@ def degrading_dataset_experiment():
         val_dataset = dataset.skip(n_train_samples + n_test_samples).take(n_val_samples)
 
         train_dataset = (
-            dataset.shuffle(buffer_size=n_train_samples)
+            train_dataset.shuffle(buffer_size=n_train_samples)
             .batch(FLAGS.batch_size, drop_remainder=True)
             .repeat()
         )
