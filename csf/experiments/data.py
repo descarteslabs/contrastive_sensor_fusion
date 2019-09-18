@@ -57,7 +57,8 @@ def load_osm_dataset(remote_prefix, band_indices):
         "label": tf.io.FixedLenSequenceFeature([], dtype=tf.int64, allow_missing=True),
     }
 
-    input_shape = (OSM_TILESIZE, OSM_TILESIZE, gf.n_bands())
+    #    input_shape = (OSM_TILESIZE, OSM_TILESIZE, gf.n_bands())
+    input_shape = (OSM_TILESIZE, OSM_TILESIZE, 12)
     target_shape = (N_OSM_LABELS,)
 
     def _parse_image_function(example_proto):
@@ -97,5 +98,5 @@ def load_osm_dataset(remote_prefix, band_indices):
         tf.data.TFRecordDataset(tfrecord_paths)
         .with_options(options)
         .map(_parse_image_function)
-        .cache()
+        #.cache()
     )

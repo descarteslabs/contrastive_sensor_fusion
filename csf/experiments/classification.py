@@ -7,7 +7,7 @@ from tensorflow.keras.layers import (Concatenate, Conv2D, Dense,
 
 from csf import global_flags as gf
 from csf.experiments.data import N_OSM_LABELS, N_OSM_SAMPLES, load_osm_dataset
-from csf.experiments.utils import encoder_head, LRMultiplierAdam
+from csf.experiments.utils import encoder_head, LRMultiplierAdam, default_bands
 
 FLAGS = flags.FLAGS
 
@@ -122,10 +122,12 @@ def degrading_inputs_experiment():
 
 
 def degrading_dataset_experiment():
-    # Drop dataset samples
-    for n_samples_keep in (8000, 5000, 2000, 1000, 500):
-        band_indices = list(range(gf.n_bands()))
+    """ Drop dataset samples """
+    band_indices = list()
+    for band in FLAGS.bands:
+        band_indices.append(default_bands.index(band))
 
+    for n_samples_keep in (8000, 5000, 2000, 1000, 500):
         dataset = load_osm_dataset(FLAGS.osm_data_prefix, band_indices)
 
         n_train_samples = int(n_samples_keep * FLAGS.train_fraction)
@@ -148,7 +150,7 @@ def degrading_dataset_experiment():
         model = classification_model(
             size=128,
             n_labels=N_OSM_LABELS,
-            bands=FLAGS.bands[: gf.n_bands()],
+            bands=FLAGS.bands,
             batchsize=FLAGS.batch_size,
             checkpoint_file=FLAGS.checkpoint_file,
         )
