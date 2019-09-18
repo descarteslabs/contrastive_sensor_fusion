@@ -72,9 +72,9 @@ def classification_experiment():
         os.path.basename(FLAGS.checkpoint_file)
     )
 
-    n_train_samples = int(dataset_size * FLAGS.train_fraction)
-    n_test_samples = int(dataset_size * FLAGS.test_fraction)
-    n_val_samples = int(dataset_size * FLAGS.val_fraction)
+    n_test_samples = int(N_OSM_SAMPLES * FLAGS.test_fraction)
+    n_val_samples = int(N_OSM_SAMPLES * FLAGS.val_fraction)
+    n_train_samples = min(dataset_size, N_OSM_SAMPLES - n_test_samples - n_val_samples)
 
     dataset = load_osm_dataset(FLAGS.osm_data_prefix, band_indices)
     train_dataset = dataset.take(n_train_samples)
