@@ -1,4 +1,5 @@
 from absl import flags
+import os.path
 import tensorflow as tf
 from tensorflow.keras.layers import Concatenate, Conv2D, Dense, Input, Lambda, GlobalMaxPooling2D, Flatten, GlobalAveragePooling2D
 from tensorflow.keras import Model
@@ -19,6 +20,9 @@ flags.DEFINE_string(
 )
 flags.DEFINE_string(
     "osm_data_prefix", None, "Glob matching the prefix of OSM data to use."
+)
+flags.DEFINE_integer(
+    "dataset_size", N_OSM_SAMPLES, "Size of dataset to use"
 )
 
 flags.mark_flags_as_required(["checkpoint_file", "osm_data_prefix"])
@@ -56,136 +60,75 @@ def classification_model(size, n_labels, bands=None, batchsize=8, checkpoint_fil
     return Model(inputs=model_inputs, outputs=[out])
 
 
-def degrading_inputs_experiment():
+def classification_experiment():
     # Drop bands starting from high resolution to lower resolution
-    for n_bands in range(gf.n_bands(), 0, -1):
-        band_indices = list(range(n_bands))
-
-        n_train_samples = int(N_OSM_SAMPLES * FLAGS.train_fraction)
-        n_test_samples = int(N_OSM_SAMPLES * FLAGS.test_fraction)
-        n_val_samples = int(N_OSM_SAMPLES * FLAGS.val_fraction)
-
-        dataset = load_osm_dataset(FLAGS.osm_data_prefix, band_indices)
-        train_dataset = dataset.take(n_train_samples)
-        test_dataset = dataset.skip(n_train_samples).take(n_test_samples)
-        val_dataset = dataset.skip(n_train_samples + n_test_samples).take(n_val_samples)
-
-        train_dataset = (
-            train_dataset.shuffle(buffer_size=n_train_samples)
-            .batch(FLAGS.batch_size, drop_remainder=True)
-            .repeat()
-        )
-        test_dataset = test_dataset.batch(FLAGS.batch_size, drop_remainder=True).repeat()
-        val_dataset = val_dataset.batch(FLAGS.batch_size, drop_remainder=True).repeat()
-
-        model = classification_model(
-            size=128,
-            n_labels=N_OSM_LABELS,
-            bands=FLAGS.bands[:n_bands],
-            batchsize=FLAGS.batch_size,
-            checkpoint_file=FLAGS.checkpoint_file,
-        )
-
-        model.compile(
-            optimizer=LRMultiplierAdam(
-                learning_rate=FLAGS.learning_rate,
-                clipnorm=1.0,
-                multipliers={"dense1": 10.0}
-            ),
-            loss=tf.keras.losses.CategoricalCrossentropy(),
-            metrics=[
-                tf.keras.metrics.CategoricalAccuracy(),
-                tf.keras.metrics.TopKCategoricalAccuracy(k=2),
-            ],
-        )
-
-        model.fit(
-            train_dataset,
-            epochs=64,
-            steps_per_epoch=n_train_samples // FLAGS.batch_size,
-            validation_data=val_dataset,
-            validation_steps=n_val_samples // FLAGS.batch_size,
-            callbacks=[
-                tf.keras.callbacks.ModelCheckpoint(
-                    'classification_%02dband_{val_categorical_accuracy:.4f}_'
-                    '{val_top_k_categorical_accuracy:.4f}_epoch{epoch:02d}.h5' % (n_bands,),
-                    verbose=1,
-                    monitor='val_categorical_accuracy',
-                    mode='max',
-                    save_weights_only=True
-                )
-            ],
-        )
-
-        print("EVAL:")
-        model.evaluate(test_dataset, steps=n_test_samples // FLAGS.batch_size)
-
-
-def degrading_dataset_experiment():
-    """ Drop dataset samples """
     band_indices = list()
     for band in FLAGS.bands:
         band_indices.append(default_bands.index(band))
+    dataset_size = FLAGS.dataset_size or N_OSM_SAMPLES
+    output_weights_prefix = 'classify_bands=%s_samples=%04i_weights=%s' % (
+        ','.join(map(str, band_indices)),
+        dataset_size,
+        os.path.basename(FLAGS.checkpoint_file)
+    )
 
-    for n_samples_keep in (8000, 5000, 2000, 1000, 500):
-        dataset = load_osm_dataset(FLAGS.osm_data_prefix, band_indices)
+    n_train_samples = int(dataset_size * FLAGS.train_fraction)
+    n_test_samples = int(dataset_size * FLAGS.test_fraction)
+    n_val_samples = int(dataset_size * FLAGS.val_fraction)
 
-        n_train_samples = int(n_samples_keep * FLAGS.train_fraction)
-        n_test_samples = int(n_samples_keep * FLAGS.test_fraction)
-        n_val_samples = int(n_samples_keep * FLAGS.val_fraction)
+    dataset = load_osm_dataset(FLAGS.osm_data_prefix, band_indices)
+    train_dataset = dataset.take(n_train_samples)
+    test_dataset = dataset.skip(n_train_samples).take(n_test_samples)
+    val_dataset = dataset.skip(n_train_samples + n_test_samples).take(n_val_samples)
 
-        dataset = load_osm_dataset(FLAGS.osm_data_prefix, band_indices=band_indices)
-        train_dataset = dataset.take(n_train_samples)
-        test_dataset = dataset.skip(n_train_samples).take(n_test_samples)
-        val_dataset = dataset.skip(n_train_samples + n_test_samples).take(n_val_samples)
+    train_dataset = (
+        train_dataset.shuffle(buffer_size=n_train_samples)
+        .batch(FLAGS.batch_size, drop_remainder=True)
+        .repeat()
+    )
+    test_dataset = test_dataset.batch(FLAGS.batch_size, drop_remainder=True).repeat()
+    val_dataset = val_dataset.batch(FLAGS.batch_size, drop_remainder=True).repeat()
 
-        train_dataset = (
-            train_dataset.shuffle(buffer_size=n_train_samples)
-            .batch(FLAGS.batch_size, drop_remainder=True)
-            .repeat()
-        )
-        test_dataset = test_dataset.batch(FLAGS.batch_size, drop_remainder=True).repeat()
-        val_dataset = val_dataset.batch(FLAGS.batch_size, drop_remainder=True).repeat()
+    model = classification_model(
+        size=128,
+        n_labels=N_OSM_LABELS,
+        bands=FLAGS.bands,
+        batchsize=FLAGS.batch_size,
+        checkpoint_file=FLAGS.checkpoint_file,
+    )
 
-        model = classification_model(
-            size=128,
-            n_labels=N_OSM_LABELS,
-            bands=FLAGS.bands,
-            batchsize=FLAGS.batch_size,
-            checkpoint_file=FLAGS.checkpoint_file,
-        )
+    model.compile(
+        optimizer=LRMultiplierAdam(
+            learning_rate=FLAGS.learning_rate,
+            clipnorm=1.0,
+            multipliers={"dense1": 10.0}
+        ),
+        loss=tf.keras.losses.CategoricalCrossentropy(),
+        metrics=[
+            tf.keras.metrics.CategoricalAccuracy(),
+            tf.keras.metrics.TopKCategoricalAccuracy(k=2),
+        ],
+    )
 
-        model.compile(
-            optimizer=LRMultiplierAdam(
-                learning_rate=FLAGS.learning_rate,
-                clipnorm=1.0,
-                multipliers={"dense1": 10.0}
-            ),
-            loss=tf.keras.losses.CategoricalCrossentropy(),
-            metrics=[
-                tf.keras.metrics.CategoricalAccuracy(),
-                tf.keras.metrics.TopKCategoricalAccuracy(k=2),
-            ],
-        )
+    model.fit(
+        train_dataset,
+        epochs=64,
+        steps_per_epoch=n_train_samples // FLAGS.batch_size,
+        validation_data=val_dataset,
+        validation_steps=n_val_samples // FLAGS.batch_size,
+        callbacks=[
+            tf.keras.callbacks.ModelCheckpoint(
+                output_weights_prefix +
+                '_top1={val_categorical_accuracy:.4f}_'
+                'top2={val_top_k_categorical_accuracy:.4f}_'
+                'epoch={epoch:02d}.h5',
+                verbose=1,
+                monitor='val_categorical_accuracy',
+                mode='max',
+                save_weights_only=True
+            )
+        ],
+    )
 
-        model.fit(
-            train_dataset,
-            epochs=64,
-            steps_per_epoch=n_train_samples // FLAGS.batch_size,
-            validation_data=val_dataset,
-            validation_steps=n_val_samples // FLAGS.batch_size,
-            callbacks=[
-                tf.keras.callbacks.ModelCheckpoint(
-                    'classification_%04dsamples_{val_categorical_accuracy:.4f}_'
-                    '{val_top_k_categorical_accuracy:.4f}_epoch{epoch:02d}.h5' % (n_samples_keep,),
-                    verbose=1,
-                    mode='max',
-                    monitor='val_categorical_accuracy',
-                    save_weights_only=True,
-                    save_best_only=True
-                )
-            ],
-        )
-
-        print("EVAL:")
-        model.evaluate(test_dataset, steps=n_test_samples // FLAGS.batch_size)
+    print("EVAL:")
+    model.evaluate(test_dataset, steps=n_test_samples // FLAGS.batch_size)
