@@ -25,15 +25,18 @@ def encoder_head(size, bands=None, batchsize=8, checkpoint_dir=None, checkpoint_
     if n_bands <= 0:
         raise ValueError("You must provide some bands")
 
-    encoder = resnet_encoder(n_input_bands=12)
     # Load upstream weights into encoder
-    if checkpoint_dir is not None:
-        weights_path = tf.train.latest_checkpoint(checkpoint_dir)
-        checkpoint = tf.train.Checkpoint(encoder=encoder)
-        checkpoint.restore(weights_path).expect_partial()
-    elif checkpoint_file is not None:
-        checkpoint = tf.train.Checkpoint(encoder=encoder)
-        checkpoint.restore(checkpoint_file).expect_partial()
+    if checkpoint_dir == 'imagenet' or checkpoint_file == 'imagenet':
+        encoder = resnet_encoder(n_input_bands=12, weights='imagenet')
+    else:
+        encoder = resnet_encoder(n_input_bands=12)
+        if checkpoint_dir is not None:
+            weights_path = tf.train.latest_checkpoint(checkpoint_dir)
+            checkpoint = tf.train.Checkpoint(encoder=encoder)
+            checkpoint.restore(weights_path).expect_partial()
+        elif checkpoint_file is not None:
+            checkpoint = tf.train.Checkpoint(encoder=encoder)
+            checkpoint.restore(checkpoint_file).expect_partial()
     encoder.trainable = trainable
 
     model_inputs = Input(batch_shape=(batchsize, size, size, n_bands))
