@@ -87,5 +87,15 @@ def load_osm_dataset(remote_prefix, band_indices):
             for filename in glob.glob(remote_prefix)
             if os.path.isfile(filename)
         ]
-    dataset = tf.data.TFRecordDataset(tfrecord_paths)
-    return dataset.map(_parse_image_function)
+
+    options = tf.data.Options()
+    options.experimental_deterministic = False
+    options.experimental_optimization.parallel_batch = True
+    options.experimental_optimization.map_vectorization.enabled = True
+
+    return (
+        tf.data.TFRecordDataset(tfrecord_paths)
+        .with_options(options)
+        .map(_parse_image_function)
+        .cache()
+    )
