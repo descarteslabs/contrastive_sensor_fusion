@@ -68,8 +68,8 @@ def degrading_inputs_experiment():
 
         dataset = load_osm_dataset(FLAGS.osm_data_prefix, band_indices)
         train_dataset = dataset.take(n_train_samples)
-        test_dataset = dataset.take(n_test_samples)
-        val_dataset = dataset.take(n_val_samples)
+        test_dataset = dataset.skip(n_train_samples).take(n_test_samples)
+        val_dataset = dataset.skip(n_train_samples + n_test_samples).take(n_val_samples)
 
         train_dataset = (
             dataset.shuffle(buffer_size=n_train_samples)
@@ -124,7 +124,7 @@ def degrading_inputs_experiment():
 
 def degrading_dataset_experiment():
     # Drop dataset samples
-    for n_samples_keep in (8000, 6000, 4000, 2000, 1000, 500, 250):
+    for n_samples_keep in (8000, 5000, 2000, 1000, 500):
         band_indices = list(range(gf.n_bands()))
 
         dataset = load_osm_dataset(FLAGS.osm_data_prefix, band_indices)
