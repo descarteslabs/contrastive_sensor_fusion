@@ -13,22 +13,22 @@ Experiments in the paper were run with the following commands from this director
     export OURS='***REMOVED***'
 
     # Experiments which drop bands in order:
-    $EXPERIMENT --checkpoint_file=$OURS # (all bands)
-    $EXPERIMENT --checkpoint_file=$OURS --bands=SPOT_red,SPOT_green,SPOT_blue,SPOT_nir,NAIP_red,NAIP_green,NAIP_blue,NAIP_nir,PHR_red,PHR_green,PHR_blue
-    $EXPERIMENT --checkpoint_file=$OURS --bands=SPOT_red,SPOT_green,SPOT_blue,SPOT_nir,NAIP_red,NAIP_green,NAIP_blue,NAIP_nir,PHR_red,PHR_green
-    $EXPERIMENT --checkpoint_file=$OURS --bands=SPOT_red,SPOT_green,SPOT_blue,SPOT_nir,NAIP_red,NAIP_green,NAIP_blue,NAIP_nir,PHR_red
-    $EXPERIMENT --checkpoint_file=$OURS --bands=SPOT_red,SPOT_green,SPOT_blue,SPOT_nir,NAIP_red,NAIP_green,NAIP_blue,NAIP_nir
-    $EXPERIMENT --checkpoint_file=$OURS --bands=SPOT_red,SPOT_green,SPOT_blue,SPOT_nir,NAIP_red,NAIP_green,NAIP_blue
-    $EXPERIMENT --checkpoint_file=$OURS --bands=SPOT_red,SPOT_green,SPOT_blue,SPOT_nir,NAIP_red,NAIP_green
-    $EXPERIMENT --checkpoint_file=$OURS --bands=SPOT_red,SPOT_green,SPOT_blue,SPOT_nir,NAIP_red
+    ~$EXPERIMENT --checkpoint_file=$OURS # (all bands)
+    ~$EXPERIMENT --checkpoint_file=$OURS --bands=SPOT_red,SPOT_green,SPOT_blue,SPOT_nir,NAIP_red,NAIP_green,NAIP_blue,NAIP_nir,PHR_red,PHR_green,PHR_blue
+    ~$EXPERIMENT --checkpoint_file=$OURS --bands=SPOT_red,SPOT_green,SPOT_blue,SPOT_nir,NAIP_red,NAIP_green,NAIP_blue,NAIP_nir,PHR_red,PHR_green
+    ~$EXPERIMENT --checkpoint_file=$OURS --bands=SPOT_red,SPOT_green,SPOT_blue,SPOT_nir,NAIP_red,NAIP_green,NAIP_blue,NAIP_nir,PHR_red
+    ~$EXPERIMENT --checkpoint_file=$OURS --bands=SPOT_red,SPOT_green,SPOT_blue,SPOT_nir,NAIP_red,NAIP_green,NAIP_blue,NAIP_nir
+    ~$EXPERIMENT --checkpoint_file=$OURS --bands=SPOT_red,SPOT_green,SPOT_blue,SPOT_nir,NAIP_red,NAIP_green,NAIP_blue
+    ~$EXPERIMENT --checkpoint_file=$OURS --bands=SPOT_red,SPOT_green,SPOT_blue,SPOT_nir,NAIP_red,NAIP_green
+    ~$EXPERIMENT --checkpoint_file=$OURS --bands=SPOT_red,SPOT_green,SPOT_blue,SPOT_nir,NAIP_red
     $EXPERIMENT --checkpoint_file=$OURS --bands=SPOT_red,SPOT_green,SPOT_blue,SPOT_nir
     $EXPERIMENT --checkpoint_file=$OURS --bands=SPOT_red,SPOT_green,SPOT_blue
     $EXPERIMENT --checkpoint_file=$OURS --bands=SPOT_red,SPOT_green
     $EXPERIMENT --checkpoint_file=$OURS --bands=SPOT_red
   
-    $EXPERIMENT --checkpoint_file=imagenet --bands=PHR_red,PHR_green,PHR_blue
-    $EXPERIMENT --checkpoint_file=imagenet --bands=PHR_red,PHR_green
-    $EXPERIMENT --checkpoint_file=imagenet --bands=PHR_red
+    *$EXPERIMENT --checkpoint_file=imagenet --bands=PHR_red,PHR_green,PHR_blue
+    ~$EXPERIMENT --checkpoint_file=imagenet --bands=PHR_red,PHR_green
+    ~$EXPERIMENT --checkpoint_file=imagenet --bands=PHR_red
 
     # Experiments which shrink the dataset:
     $EXPERIMENT --checkpoint_file=$OURS --dataset_size=8000
@@ -43,11 +43,11 @@ Experiments in the paper were run with the following commands from this director
     $EXPERIMENT --checkpoint_file=$OURS --bands=PHR_red,PHR_green,PHR_blue --dataset_size=1000
     $EXPERIMENT --checkpoint_file=$OURS --bands=PHR_red,PHR_green,PHR_blue --dataset_size=500
 
-    $EXPERIMENT --checkpoint_file=imagenet --bands=PHR_red,PHR_green,PHR_blue --dataset_size=8000
-    $EXPERIMENT --checkpoint_file=imagenet --bands=PHR_red,PHR_green,PHR_blue --dataset_size=5000
-    $EXPERIMENT --checkpoint_file=imagenet --bands=PHR_red,PHR_green,PHR_blue --dataset_size=2000
-    $EXPERIMENT --checkpoint_file=imagenet --bands=PHR_red,PHR_green,PHR_blue --dataset_size=1000
-    $EXPERIMENT --checkpoint_file=imagenet --bands=PHR_red,PHR_green,PHR_blue --dataset_size=500
+    ~$EXPERIMENT --checkpoint_file=imagenet --bands=PHR_red,PHR_green,PHR_blue --dataset_size=8000
+    ~$EXPERIMENT --checkpoint_file=imagenet --bands=PHR_red,PHR_green,PHR_blue --dataset_size=5000
+    *$EXPERIMENT --checkpoint_file=imagenet --bands=PHR_red,PHR_green,PHR_blue --dataset_size=2000
+    *$EXPERIMENT --checkpoint_file=imagenet --bands=PHR_red,PHR_green,PHR_blue --dataset_size=1000
+    *$EXPERIMENT --checkpoint_file=imagenet --bands=PHR_red,PHR_green,PHR_blue --dataset_size=500
 
     # Experiments which drop specific bands:
     $EXPERIMENT --checkpoint_file=$OURS --bands=SPOT_red,SPOT_green,SPOT_blue,SPOT_nir # (redundant)
