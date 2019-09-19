@@ -77,7 +77,7 @@ def classification_experiment():
     n_train_samples = min(dataset_size, N_OSM_SAMPLES - n_test_samples - n_val_samples)
 
     dataset = load_osm_dataset(FLAGS.osm_data_prefix, band_indices).shuffle(buffer_size=N_OSM_SAMPLES, seed=0)
-    test_dataset = dataset.skip.take(n_test_samples)
+    test_dataset = dataset.take(n_test_samples)
     val_dataset = dataset.skip(n_test_samples).take(n_val_samples)
     train_dataset = dataset.skip(n_test_samples + n_val_samples).take(n_train_samples)
 
