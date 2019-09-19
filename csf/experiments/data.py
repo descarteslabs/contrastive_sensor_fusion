@@ -8,7 +8,7 @@ import subprocess as sp
 
 import tensorflow as tf
 
-from csf import global_flags as gf
+from csf import global_flags as gf  # noqa
 
 OSM_TILESIZE = 128
 N_OSM_LABELS = 12
@@ -28,11 +28,6 @@ OSM_CLASSES = [
     "Bare rock",
 ]
 
-BUILDINGS_TILESIZE = 512
-N_BUILDINGS_TRAIN_SAMPLES = 12000
-N_BUILDINGS_VAL_SAMPLES = 12000
-N_BUILDINGS_TEST_SAMPLES = 12000
-
 
 def load_osm_dataset(remote_prefix, band_indices):
     """
@@ -40,8 +35,8 @@ def load_osm_dataset(remote_prefix, band_indices):
 
     Parameters
     ----------
-    remote_prefix : string
-        A glob specifying the prefix of files used to load the dataset.
+    remote_path : string
+        A glob specifying the path of files used to load the dataset.
     band_indices : [int]
         List of input bands to keep.
 
@@ -90,13 +85,13 @@ def load_osm_dataset(remote_prefix, band_indices):
         ]
 
     options = tf.data.Options()
-    options.experimental_deterministic = False
-    options.experimental_optimization.parallel_batch = True
+    options.experimental_deterministic = True  # TODO: false
+    options.experimental_optimization.parallel_batch = False  # TODO: true
     options.experimental_optimization.map_vectorization.enabled = True
 
     return (
         tf.data.TFRecordDataset(tfrecord_paths)
         .with_options(options)
         .map(_parse_image_function)
-        #.cache()
+        .cache()
     )

@@ -1,28 +1,29 @@
 import tensorflow as tf
 import tensorflow.keras.backend as K
-from tensorflow.keras.optimizers import Adam
 from absl import flags
 from tensorflow.keras.layers import Concatenate, Input, Lambda
+from tensorflow.keras.optimizers import Adam
 
-import csf.global_flags as gf
+import csf.global_flags as gf  # noqa
 from csf.encoder import resnet_encoder
 
 FLAGS = flags.FLAGS
 
 default_bands = (
-    'SPOT_red',
-    'SPOT_green',
-    'SPOT_blue',
-    'SPOT_nir',
-    'NAIP_red',
-    'NAIP_green',
-    'NAIP_blue',
-    'NAIP_nir',
-    'PHR_red',
-    'PHR_green',
-    'PHR_blue',
-    'PHR_nir',
+    "SPOT_red",
+    "SPOT_green",
+    "SPOT_blue",
+    "SPOT_nir",
+    "NAIP_red",
+    "NAIP_green",
+    "NAIP_blue",
+    "NAIP_nir",
+    "PHR_red",
+    "PHR_green",
+    "PHR_blue",
+    "PHR_nir",
 )
+
 
 def encoder_head(
     size,
@@ -30,7 +31,7 @@ def encoder_head(
     batchsize=8,
     checkpoint_dir=None,
     checkpoint_file=None,
-    trainable=False
+    trainable=False,
 ):
     """Useful for building a model on top of the resnet encoder.
     Adds some convenience layers to reorder bands, provide zeros
@@ -47,9 +48,12 @@ def encoder_head(
         raise ValueError("You must provide some bands")
 
     # Load upstream weights into encoder
-    if checkpoint_dir == 'imagenet' or checkpoint_file == 'imagenet':
+    if checkpoint_dir == "imagenet" or checkpoint_file == "imagenet":
         n_input_bands = 3
-        encoder = resnet_encoder(n_input_bands, weights='imagenet')
+        encoder = resnet_encoder(n_input_bands, weights="imagenet")
+    elif checkpoint_dir == "random" or checkpoint_file == "random":
+        n_input_bands = 3
+        encoder = resnet_encoder(n_input_bands, weights=None)
     else:
         n_input_bands = 12
         encoder = resnet_encoder(n_input_bands)
@@ -75,7 +79,7 @@ def encoder_head(
             else:
                 to_concat.append(K.zeros(shape=(batchsize, size, size, 1)))
     else:
-        for rgb_band in ('red', 'green', 'blue'):
+        for rgb_band in ("red", "green", "blue"):
             for band_i, band in enumerate(bands):
                 if band.endswith(rgb_band):
                     to_concat.append(K.expand_dims(model_inputs[..., band_i], axis=-1))
@@ -85,7 +89,8 @@ def encoder_head(
     all_inputs = Concatenate(axis=-1)(to_concat)
 
     # Multiply inputs according to missing bands
-    scaled_inputs = Lambda(lambda x: x * n_input_bands / n_bands)(all_inputs)
+    #  scaled_inputs = Lambda(lambda x: x * n_input_bands / n_bands)(all_inputs)
+    scaled_inputs = all_inputs
     encoded = encoder(scaled_inputs)
 
     return model_inputs, scaled_inputs, encoded
