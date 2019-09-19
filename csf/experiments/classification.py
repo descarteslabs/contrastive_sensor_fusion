@@ -76,10 +76,10 @@ def classification_experiment():
     n_val_samples = int(N_OSM_SAMPLES * FLAGS.val_fraction)
     n_train_samples = min(dataset_size, N_OSM_SAMPLES - n_test_samples - n_val_samples)
 
-    dataset = load_osm_dataset(FLAGS.osm_data_prefix, band_indices)
-    train_dataset = dataset.take(n_train_samples)
-    test_dataset = dataset.skip(n_train_samples).take(n_test_samples)
-    val_dataset = dataset.skip(n_train_samples + n_test_samples).take(n_val_samples)
+    dataset = load_osm_dataset(FLAGS.osm_data_prefix, band_indices).shuffle(buffer_size=N_OSM_SAMPLES, seed=0)
+    test_dataset = dataset.skip.take(n_test_samples)
+    val_dataset = dataset.skip(n_test_samples).take(n_val_samples)
+    train_dataset = dataset.skip(n_test_samples + n_val_samples).take(n_train_samples)
 
     train_dataset = (
         train_dataset.shuffle(buffer_size=n_train_samples)
