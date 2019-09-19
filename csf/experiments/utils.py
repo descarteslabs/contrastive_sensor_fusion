@@ -68,12 +68,12 @@ def encoder_head(
     to_concat = list()
     if n_input_bands == 12:
         for default_band in default_bands:
-            try:
-                band_i = bands.index(default_band)
-            except ValueError:
-                to_concat.append(K.zeros(shape=(batchsize, size, size, 1)))
+            for band_i, band in enumerate(bands):
+                if band == default_band:
+                    to_concat.append(K.expand_dims(model_inputs[..., band_i], axis=-1))
+                    break
             else:
-                to_concat.append(K.expand_dims(model_inputs[..., band_i], axis=-1))
+                to_concat.append(K.zeros(shape=(batchsize, size, size, 1)))
     else:
         for rgb_band in ('red', 'green', 'blue'):
             for band_i, band in enumerate(bands):
@@ -85,7 +85,7 @@ def encoder_head(
     all_inputs = Concatenate(axis=-1)(to_concat)
 
     # Multiply inputs according to missing bands
-    scaled_inputs = Lambda(lambda x: x * gf.n_bands() / n_bands)(all_inputs)
+    scaled_inputs = Lambda(lambda x: x * n_input_bands / n_bands)(all_inputs)
     encoded = encoder(scaled_inputs)
 
     return model_inputs, scaled_inputs, encoded
