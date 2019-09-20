@@ -67,6 +67,8 @@ flags.DEFINE_float(
     "Temperature to use for softmax loss. Changing this parameter is not recommended.",
     lower_bound=0.01,
 )
+flags.DEFINE_bool("flips", True, "Whether to apply cross-view random flips.")
+flags.DEFINE_bool("rotation", True, "Whether to apply cross-view random rotations.")
 flags.DEFINE_float(
     "gradient_clipnorm",
     1.0,
@@ -197,6 +199,18 @@ def _create_view(scene, dropout_rate, seed=None):
         name="band_dropout",
         seed=seed,
     )
+
+    if FLAGS.flips:
+        scene = tf.image.random_flip_up_down(scene, seed=seed)
+        scene = tf.image.random_flip_left_right(scene, seed=seed)
+
+    if FLAGS.rotation:
+        scene = tf.image.rot90(
+            scene,
+            k=tf.random.uniform(
+                shape=(), minval=0, maxval=3, dtype=tf.dtypes.int32, seed=seed
+            ),
+        )
 
     return scene
 
