@@ -30,7 +30,7 @@ flags.mark_flags_as_required(
 # Optional parameters with sensible defaults
 flags.DEFINE_float("learning_rate", 1e-5, "Classification experiments' learning rate.")
 flags.DEFINE_integer("batch_size", 32, "Batch size for classification experiments.")
-flags.DEFINE_integet("epochs", 16, "Number of epochs to train for.")
+flags.DEFINE_integer("epochs", 16, "Number of epochs to train for.")
 
 
 def classification_model(size, n_labels, bands=None, batchsize=8, checkpoint=None):

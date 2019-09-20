@@ -2,11 +2,11 @@ import sys
 
 from absl import app, flags
 
-from csf.experiments.projection import make_projection_figures
+from csf.experiments.projection import plot_osm_representations
 
 
 def main(_):
-    make_projection_figures()
+    plot_osm_representations()
 
 
 if __name__ == "__main__":

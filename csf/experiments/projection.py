@@ -1,6 +1,6 @@
 """
-Code for projecting representations into a lower-dimensional space with PCA and t-SNE,
-and plotting the results.
+Code for projecting representations into a lower-dimensional space with the encoder,
+PCA, and t-SNE, and plotting the results.
 """
 
 import os
@@ -25,12 +25,6 @@ flags.DEFINE_string("osm_data", None, "Glob matching the OSM data to use.")
 flags.DEFINE_list("experiment_bands", None, "Bands used for creating representations.")
 flags.DEFINE_integer("perplexity", None, "Perplexity used for t-SNE.")
 flags.mark_flags_as_required(["osm_data", "experiment_bands", "perplexity"])
-flags.DEFINE_string(
-    "checkpoint",
-    None,
-    "Path to a checkpoint used to initialize the encoder with. "
-    "Must be provided if representations have not been created already.",
-)
 
 # Optional parameters with sensible defaults
 flags.DEFINE_string(
@@ -47,6 +41,7 @@ flags.DEFINE_integer(
 )
 flags.DEFINE_integer("tsne_iterations", 2000, "Maximum number of iterations for t-SNE.")
 flags.DEFINE_float("figure_size", 10, "Width and height of the plots in inches.")
+flags.DEFINE_string("checkpoint", None, "Checkpoint, if one must be provided.")
 
 # Try to roughly group similar classes
 OSM_CLASS_ORDER = [
@@ -147,11 +142,25 @@ def _load_txt(savedir):
     return np.asarray(labels), np.asarray(projection)
 
 
-def make_projection_figures():
+def get_osm_representations(encoder):
     """
-    Make plots of the representations of various points from the OSM dataset.
+    Make an encoder's representations of the OSM dataset.
+
+    Parameters
+    ----------
+    encoder : tf.keras.Model or string
+        Existing encoder, 'imagenet', or path to a model checkpoint.
+
+    Returns
+    -------
+    ndarray
+        Array of the images loaded.
+    ndarray
+        Array of the labels of the images loaded.
+    ndarray
+        Array of the representations of the images loaded.
     """
-    logging.info("Making projection figures with flags:")
+    logging.info("Making OSM representations with flags:")
     logging.info(FLAGS.flags_into_string())
 
     # NOTE: number of points plotted is rounded down to a multiple of batch_size
@@ -160,10 +169,6 @@ def make_projection_figures():
     n_bands = len(FLAGS.experiment_bands)
     band_indices = [FLAGS.bands.index(band) for band in FLAGS.experiment_bands]
 
-    if not os.path.exists(FLAGS.out_dir):
-        logging.info("Creating path: {}".format(FLAGS.out_dir))
-        os.makedirs(FLAGS.out_dir)
-
     logging.debug("Loading dataset.")
     dataset = (
         load_osm_dataset(FLAGS.osm_data, band_indices)
@@ -171,11 +176,63 @@ def make_projection_figures():
         .take(n_batches)
     )
 
+    if type(encoder) == str:
+        logging.debug("Loading encoder.")
+        encoder_inputs, _, encoder_representations = encoder_head(
+            OSM_TILESIZE,
+            FLAGS.experiment_bands,
+            FLAGS.batch_size,
+            encoder,
+            trainable=False,
+            assert_checkpoint=True,
+        )
+        encoder = tf.keras.Model(
+            inputs=encoder_inputs,
+            outputs=[encoder_representations[FLAGS.representation_layer]],
+        )
+        representation_size = np.product(encoder.output.shape.as_list()[1:])
+
+    @tf.function
+    def process_batch(batch):
+        images, labels_onehot = batch
+        images_scaled = tf.cast((images + 1.0) * 128.0, tf.dtypes.uint8)
+        labels = tf.cast(tf.argmax(labels_onehot, axis=1), tf.dtypes.uint8)
+        representations = tf.reshape(encoder(images), (FLAGS.batch_size, -1))
+
+        return images_scaled, labels, representations
+
+    logging.debug("Initializing result storage.")
+    images = np.zeros((n_points, OSM_TILESIZE, OSM_TILESIZE, n_bands), np.uint8)
+    labels = np.zeros((n_points,), np.uint8)
+    representations = np.zeros((n_points, representation_size), np.float32)
+
+    logging.info("Encoding images.")
+    for i, batch in dataset.enumerate():
+        start_idx = i * FLAGS.batch_size
+        end_idx = start_idx + FLAGS.batch_size
+        images_, labels_, representations_ = process_batch(batch)
+
+        images[start_idx:end_idx, :, :, :] = images_.numpy()
+        labels[start_idx:end_idx] = labels_.numpy()
+        representations[start_idx:end_idx, :] = representations_.numpy()
+
+    logging.info("Done encoding!")
+    return images, labels, representations
+
+
+def plot_osm_representations():
+    """
+    Make plots of the representations of various points from the OSM dataset.
+    """
     representation_savepath = os.path.join(
         FLAGS.out_dir, "representations_{}.npy".format(FLAGS.representation_layer)
     )
     pca_savepath = os.path.join(FLAGS.out_dir, "pca_points")
     tsne_savepath = os.path.join(FLAGS.out_dir, "tsne_points")
+
+    if not os.path.exists(FLAGS.out_dir):
+        logging.info("Creating path: {}".format(FLAGS.out_dir))
+        os.makedirs(FLAGS.out_dir)
 
     if os.path.exists(pca_savepath):
         logging.info("Loading existing projections from path: {}".format(FLAGS.out_dir))
@@ -194,50 +251,12 @@ def make_projection_figures():
             if not FLAGS.checkpoint:
                 raise ValueError(
                     "If representations have not been saved already, "
-                    "`checkpoint` must be provided."
+                    "`checkpoint` flag must be provided."
                 )
 
+            images, labels, representations = get_osm_representations(FLAGS.checkpoint)
+
             logging.info("Writing new representations to {}".format(FLAGS.out_dir))
-            logging.debug("Loading encoder.")
-            encoder_inputs, _, encoder_representations = encoder_head(
-                OSM_TILESIZE,
-                FLAGS.experiment_bands,
-                FLAGS.batch_size,
-                FLAGS.checkpoint,
-                trainable=False,
-                assert_checkpoint=True,
-            )
-            encoder = tf.keras.Model(
-                inputs=encoder_inputs,
-                outputs=[encoder_representations[FLAGS.representation_layer]],
-            )
-            representation_size = np.product(encoder.output.shape.as_list()[1:])
-
-            @tf.function
-            def process_batch(batch):
-                images, labels_onehot = batch
-                images_scaled = tf.cast((images + 1.0) * 128.0, tf.dtypes.uint8)
-                labels = tf.cast(tf.argmax(labels_onehot, axis=1), tf.dtypes.uint8)
-                representations = tf.reshape(encoder(images), (FLAGS.batch_size, -1))
-
-                return images_scaled, labels, representations
-
-            logging.debug("Initializing result storage.")
-            images = np.zeros((n_points, OSM_TILESIZE, OSM_TILESIZE, n_bands), np.uint8)
-            labels = np.zeros((n_points,), np.uint8)
-            representations = np.zeros((n_points, representation_size), np.float32)
-
-            logging.info("Encoding images.")
-            for i, batch in dataset.enumerate():
-                start_idx = i * FLAGS.batch_size
-                end_idx = start_idx + FLAGS.batch_size
-                images_, labels_, representations_ = process_batch(batch)
-
-                images[start_idx:end_idx, :, :, :] = images_.numpy()
-                labels[start_idx:end_idx] = labels_.numpy()
-                representations[start_idx:end_idx, :] = representations_.numpy()
-
-            logging.info("Done encoding!")
             np.save(os.path.join(FLAGS.out_dir, "images.npy"), images)
             np.save(os.path.join(FLAGS.out_dir, "labels.npy"), labels)
             np.save(representation_savepath, representations)
