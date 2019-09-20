@@ -16,24 +16,17 @@ from sklearn.manifold import TSNE
 
 from csf import global_flags  # noqa
 from csf.encoder import encoder_head
-from csf.experiments.data import (
-    N_OSM_SAMPLES,
-    OSM_CLASSES,
-    OSM_TILESIZE,
-    load_osm_dataset,
-)
+from csf.experiments.data import OSM_CLASSES, OSM_TILESIZE, load_osm_dataset
 
 FLAGS = flags.FLAGS
 
 # Required parameters
-flags.DEFINE_string(
-    "osm_data_prefix", None, "Glob matching the prefix of OSM data to use."
-)
+flags.DEFINE_string("osm_data", None, "Glob matching the OSM data to use.")
 flags.DEFINE_list("experiment_bands", None, "Bands used for creating representations.")
 flags.DEFINE_integer("perplexity", None, "Perplexity used for t-SNE.")
-flags.mark_flags_as_required(["osm_data_prefix", "experiment_bands", "perplexity"])
+flags.mark_flags_as_required(["osm_data", "experiment_bands", "perplexity"])
 flags.DEFINE_string(
-    "model_checkpoint",
+    "checkpoint",
     None,
     "Path to a checkpoint used to initialize the encoder with. "
     "Must be provided if representations have not been created already.",
@@ -43,9 +36,7 @@ flags.DEFINE_string(
 flags.DEFINE_string(
     "representation_layer", "conv5_block3_out", "Which layer of representation to plot."
 )
-flags.DEFINE_integer(
-    "n_points", 1024, "Number of points to plot.", upper_bound=N_OSM_SAMPLES
-)
+flags.DEFINE_integer("n_points", 1024, "Number of points to plot.")
 flags.DEFINE_string("out_dir", "visualizations", "Directory to save outputs.")
 flags.DEFINE_integer("batch_size", 32, "Batch size for encoding step.")
 flags.DEFINE_integer(
@@ -175,7 +166,7 @@ def make_projection_figures():
 
     logging.debug("Loading dataset.")
     dataset = (
-        load_osm_dataset(FLAGS.osm_data_prefix, band_indices)
+        load_osm_dataset(FLAGS.osm_data, band_indices)
         .batch(FLAGS.batch_size)
         .take(n_batches)
     )
@@ -200,10 +191,10 @@ def make_projection_figures():
             labels = np.load(os.path.join(FLAGS.out_dir, "labels.npy"))
             representations = np.load(representation_savepath)
         else:
-            if not FLAGS.model_checkpoint:
+            if not FLAGS.checkpoint:
                 raise ValueError(
                     "If representations have not been saved already, "
-                    "`model_checkpoint` must be provided."
+                    "`checkpoint` must be provided."
                 )
 
             logging.info("Writing new representations to {}".format(FLAGS.out_dir))
@@ -212,7 +203,7 @@ def make_projection_figures():
                 OSM_TILESIZE,
                 FLAGS.experiment_bands,
                 FLAGS.batch_size,
-                FLAGS.model_checkpoint,
+                FLAGS.checkpoint,
                 trainable=False,
                 assert_checkpoint=True,
             )

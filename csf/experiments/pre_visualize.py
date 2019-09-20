@@ -1,27 +1,31 @@
-"""Prepare tensorflow 2.0 keras encoder weights for tensorflow 1.0 keras"""
-
-import numpy as np
-import os.path
+"""Prepare TensorFlow 2.0 Keras encoder weights for TensorFlow 1.0 Keras."""
 
 import matplotlib as mpl
-mpl.use('Agg')
-import matplotlib.pyplot as plt
-
 import tensorflow as tf
-assert tf.__version__.split('.', 1)[0] == '2', (tf.__version__, tf.__file__)
+from absl import app, flags
 
-batchsize = 1
-size = 128
+flags.DEFINE_string("checkpoint", None, "Checkpoint file or directory to port.")
+flags.mark_flag_as_required("checkpoint")
 
-weights_dest = 'ckpt.h5'
-model_base = tf.keras.applications.ResNet50V2(
-    input_shape=(size, size, 12),
-    include_top=False,
-    weights=None,
-)
+FLAGS = flags.FLAGS
 
-checkpoint_file = tf.train.latest_checkpoint('***REMOVED***outputs/basenets_fusion_basenets_fusion_tpu_deploy_2/')
-checkpoint = tf.train.Checkpoint(encoder=model_base)
-checkpoint.restore(checkpoint_file).expect_partial()
 
-model_base.save_weights(weights_dest)
+def main(_):
+    mpl.use("Agg")
+
+    assert tf.__version__.split(".", 1)[0] == "2", (tf.__version__, tf.__file__)
+
+    weights_dest = "ckpt.h5"
+    model_base = tf.keras.applications.ResNet50V2(
+        input_shape=(128, 128, 12), include_top=False, weights=None
+    )
+
+    checkpoint_file = tf.train.latest_checkpoint(FLAGS.checkpoint) or FLAGS.checkpoint
+    checkpoint = tf.train.Checkpoint(encoder=model_base)
+    checkpoint.restore(checkpoint_file).expect_partial()
+
+    model_base.save_weights(weights_dest)
+
+
+if __name__ == "__main__":
+    app.run(main)

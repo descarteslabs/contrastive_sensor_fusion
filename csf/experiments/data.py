@@ -2,17 +2,11 @@
 Utilities for loading data relevant to experiment code.
 """
 
-import glob
-import os.path
-import subprocess as sp
-
 import tensorflow as tf
 
 from csf import global_flags as gf  # noqa
 
 OSM_TILESIZE = 128
-N_OSM_LABELS = 12
-N_OSM_SAMPLES = 8600
 OSM_CLASSES = [
     "Bridge",
     "Breakwater",
@@ -29,13 +23,13 @@ OSM_CLASSES = [
 ]
 
 
-def load_osm_dataset(remote_prefix, band_indices):
+def load_osm_dataset(tfrecord_glob, band_indices):
     """
     Load the OpenStreetMap classification dataset.
 
     Parameters
     ----------
-    remote_path : string
+    tfrecord_glob : string
         A glob specifying the path of files used to load the dataset.
     band_indices : [int]
         List of input bands to keep.
@@ -52,9 +46,8 @@ def load_osm_dataset(remote_prefix, band_indices):
         "label": tf.io.FixedLenSequenceFeature([], dtype=tf.int64, allow_missing=True),
     }
 
-    #    input_shape = (OSM_TILESIZE, OSM_TILESIZE, gf.n_bands())
-    input_shape = (OSM_TILESIZE, OSM_TILESIZE, 12)
-    target_shape = (N_OSM_LABELS,)
+    input_shape = (OSM_TILESIZE, OSM_TILESIZE, gf.n_bands())
+    target_shape = (len(OSM_CLASSES),)
 
     def _parse_image_function(example_proto):
         example_features = tf.io.parse_single_example(example_proto, features)
@@ -66,31 +59,19 @@ def load_osm_dataset(remote_prefix, band_indices):
             bands_to_keep.append(tf.expand_dims(image[..., index], axis=-1))
         image = tf.concat(bands_to_keep, axis=-1)
         target = tf.reshape(
-            tf.one_hot(example_features["label"], depth=N_OSM_LABELS), target_shape
+            tf.one_hot(example_features["label"], depth=len(OSM_CLASSES)), target_shape
         )
         image = (tf.cast(image, tf.dtypes.float32) / 128.0) - 1.0
         return image, target
 
-    if remote_prefix.startswith("***REMOVED***"):
-        tfrecord_paths = (
-            sp.check_output(("gsutil", "-m", "ls", remote_prefix))
-            .decode("ascii")
-            .splitlines()
-        )
-    else:
-        tfrecord_paths = [
-            filename
-            for filename in glob.glob(remote_prefix)
-            if os.path.isfile(filename)
-        ]
-
     options = tf.data.Options()
-    options.experimental_deterministic = True  # TODO: false
-    options.experimental_optimization.parallel_batch = False  # TODO: true
+    options.experimental_deterministic = False
+    options.experimental_optimization.parallel_batch = True
     options.experimental_optimization.map_vectorization.enabled = True
 
     return (
-        tf.data.TFRecordDataset(tfrecord_paths)
+        tf.data.Dataset.list_files(tfrecord_glob)
+        .interleave(tf.data.TFRecordDataset)
         .with_options(options)
         .map(_parse_image_function)
         .cache()
