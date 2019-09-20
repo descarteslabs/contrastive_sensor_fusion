@@ -4,8 +4,8 @@ from tensorflow.keras import Model
 from tensorflow.keras.layers import Dense, Flatten
 
 from csf import global_flags as gf  # noqa
+from csf.encoder import encoder_head
 from csf.experiments.data import N_OSM_LABELS, load_osm_dataset
-from csf.experiments.utils import default_bands, encoder_head
 
 FLAGS = flags.FLAGS
 
@@ -38,8 +38,8 @@ def classification_model(size, n_labels, bands=None, batchsize=8, checkpoint_fil
     model_inputs, _, encoded = encoder_head(
         size,
         bands=bands,
-        batchsize=batchsize,
-        checkpoint_file=checkpoint_file,
+        batch_size=batchsize,
+        checkpoint=checkpoint_file,
         trainable=False,
     )
 
@@ -53,7 +53,7 @@ def classification_experiment():
     # Drop bands starting from high resolution to lower resolution
     band_indices = list()
     for band in FLAGS.experiment_bands:
-        band_indices.append(default_bands.index(band))
+        band_indices.append(FLAGS.bands.index(band))
 
     train_dataset = (
         load_osm_dataset(FLAGS.osm_data_train, band_indices)

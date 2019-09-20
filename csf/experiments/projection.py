@@ -15,13 +15,13 @@ from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 
 from csf import global_flags  # noqa
+from csf.encoder import encoder_head
 from csf.experiments.data import (
     N_OSM_SAMPLES,
     OSM_CLASSES,
     OSM_TILESIZE,
     load_osm_dataset,
 )
-from csf.experiments.utils import encoder_head
 
 FLAGS = flags.FLAGS
 
@@ -213,6 +213,8 @@ def make_projection_figures():
                 FLAGS.experiment_bands,
                 FLAGS.batch_size,
                 FLAGS.model_checkpoint,
+                trainable=False,
+                assert_checkpoint=True,
             )
             encoder = tf.keras.Model(
                 inputs=encoder_inputs,
