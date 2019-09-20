@@ -47,7 +47,7 @@ def main(_):
             _visualize_batch(batch)
         for i in range(FLAGS.views):
             with tf.name_scope("view_{}".format(i)), summary_writer.as_default():
-                view = csf.train._create_view(batch, i)
+                view = csf.train._create_view(batch, FLAGS.band_dropout_rate, i)
                 _visualize_batch(view)
 
 
