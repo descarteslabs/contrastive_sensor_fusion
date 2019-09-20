@@ -84,5 +84,5 @@ def classification_experiment():
         ],
     )
 
-    model.fit(train_dataset, epochs=1)
+    model.fit(train_dataset, epochs=16)
     model.evaluate(val_dataset)
