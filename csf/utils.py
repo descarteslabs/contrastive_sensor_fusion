@@ -2,8 +2,10 @@
 Various utilities used project-wide.
 """
 
+import os
+
 import tensorflow as tf
-from absl import flags
+from absl import flags, logging
 
 import csf.global_flags  # noqa
 
@@ -148,3 +150,10 @@ def visualize_batch(batch, visualize_bands, max_outputs=3):
             names, triples = partition_imagery((batch / 2.0) + 0.5, visualize_bands)
             for name, triple in zip(names, triples):
                 tf.summary.image(name, triple, max_outputs=max_outputs)
+
+
+def maybe_make_path(path):
+    """Maybe create a path and log it."""
+    if not os.path.exists(path):
+        logging.info("Creating path: {}".format(path))
+        os.makedirs(path)

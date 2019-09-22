@@ -17,13 +17,6 @@ FLAGS = flags.FLAGS
 
 
 # Required hyperparameters
-flags.DEFINE_integer(
-    "model_tilesize",
-    None,
-    "Tilesize model accepts for unsupervised learning. "
-    "Views are asymmetrically cropped to this size from `data_tilesize` (see data.py).",
-    lower_bound=1,
-)
 flags.DEFINE_float("learning_rate", None, "Learning rate for unsupervised training.")
 flags.DEFINE_float("band_dropout_rate", None, "Final rate of dropping out bands.")
 flags.DEFINE_list(
@@ -35,6 +28,13 @@ flags.DEFINE_list(
 
 # Optional hyperparameters, with sensible defaults.
 # For best performance, do tune some of these.
+flags.DEFINE_integer(
+    "model_tilesize",
+    128,
+    "Tilesize model accepts for unsupervised learning. "
+    "Views are asymmetrically cropped to this size from `data_tilesize` (see data.py).",
+    lower_bound=1,
+)
 flags.DEFINE_integer(
     "learning_rate_warmup_batches",
     None,

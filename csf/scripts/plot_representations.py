@@ -1,3 +1,10 @@
+"""
+Script which creates plots of learned representations.
+
+Configured by command-line arguments; run
+`python3 csf/scripts/plot_representations --helpfull` for a complete list.
+"""
+
 import sys
 
 from absl import app, flags
@@ -11,7 +18,5 @@ def main(_):
 
 if __name__ == "__main__":
     if len(sys.argv) == 1:
-        flags.FLAGS(
-            ["__main__", "--flagfile=csf/parameters/experiments_projection.cfg"]
-        )
+        flags.FLAGS(["__main__", "--flagfile=csf/parameters/experiments.cfg"])
     app.run(main)

@@ -17,20 +17,27 @@ from sklearn.manifold import TSNE
 from csf import global_flags  # noqa
 from csf.encoder import encoder_head
 from csf.experiments.data import OSM_CLASSES, OSM_TILESIZE, load_osm_dataset
+from csf.utils import maybe_make_path
 
 FLAGS = flags.FLAGS
 
 # Required parameters
 flags.DEFINE_string("osm_data", None, "Glob matching the OSM data to use.")
 flags.DEFINE_list("experiment_bands", None, "Bands used for creating representations.")
-flags.DEFINE_integer("perplexity", None, "Perplexity used for t-SNE.")
-flags.mark_flags_as_required(["osm_data", "experiment_bands", "perplexity"])
+flags.DEFINE_float(
+    "encoder_input_scaling",
+    None,
+    "Number to multiply encoder inputs by."
+    "When using CSF weights, should be 1 / (1 - final dropout rate used in training).",
+)
+flags.mark_flags_as_required(["osm_data", "experiment_bands", "encoder_input_scaling"])
 
 # Optional parameters with sensible defaults
+flags.DEFINE_integer("perplexity", 150, "Perplexity used for t-SNE.")
 flags.DEFINE_string(
     "representation_layer", "conv5_block3_out", "Which layer of representation to plot."
 )
-flags.DEFINE_integer("n_points", 1024, "Number of points to plot.")
+flags.DEFINE_integer("n_points", 8000, "Number of points to plot.")
 flags.DEFINE_string("out_dir", "visualizations", "Directory to save outputs.")
 flags.DEFINE_integer("batch_size", 32, "Batch size for encoding step.")
 flags.DEFINE_integer(
@@ -182,6 +189,7 @@ def get_osm_representations(encoder):
             OSM_TILESIZE,
             FLAGS.experiment_bands,
             FLAGS.batch_size,
+            FLAGS.encoder_input_scaling,
             encoder,
             trainable=False,
             assert_checkpoint=True,
@@ -230,52 +238,44 @@ def plot_osm_representations():
     pca_savepath = os.path.join(FLAGS.out_dir, "pca_points")
     tsne_savepath = os.path.join(FLAGS.out_dir, "tsne_points")
 
-    if not os.path.exists(FLAGS.out_dir):
-        logging.info("Creating path: {}".format(FLAGS.out_dir))
-        os.makedirs(FLAGS.out_dir)
+    maybe_make_path(FLAGS.out_dir)
+    maybe_make_path(pca_savepath)
+    maybe_make_path(tsne_savepath)
 
-    if os.path.exists(pca_savepath):
-        logging.info("Loading existing projections from path: {}".format(FLAGS.out_dir))
-        labels, pca_projection = _load_txt(pca_savepath)
-        _, tsne_projection = _load_txt(tsne_savepath)
+    if os.path.exists(representation_savepath):
+        logging.info("Loading ndarrays from path: {}".format(FLAGS.out_dir))
+        images = np.load(os.path.join(FLAGS.out_dir, "images.npy"))
+        labels = np.load(os.path.join(FLAGS.out_dir, "labels.npy"))
+        representations = np.load(representation_savepath)
     else:
-        os.makedirs(pca_savepath)
-        os.makedirs(tsne_savepath)
-
-        if os.path.exists(representation_savepath):
-            logging.info("Loading ndarrays from path: {}".format(FLAGS.out_dir))
-            images = np.load(os.path.join(FLAGS.out_dir, "images.npy"))
-            labels = np.load(os.path.join(FLAGS.out_dir, "labels.npy"))
-            representations = np.load(representation_savepath)
-        else:
-            if not FLAGS.checkpoint:
-                raise ValueError(
-                    "If representations have not been saved already, "
-                    "`checkpoint` flag must be provided."
-                )
-
-            images, labels, representations = get_osm_representations(FLAGS.checkpoint)
-
-            logging.info("Writing new representations to {}".format(FLAGS.out_dir))
-            np.save(os.path.join(FLAGS.out_dir, "images.npy"), images)
-            np.save(os.path.join(FLAGS.out_dir, "labels.npy"), labels)
-            np.save(representation_savepath, representations)
-
-        logging.info("Running PCA.")
-        pca_projection = PCA(n_components=2).fit_transform(representations)
-        _save_txt(pca_projection, labels, pca_savepath)
-
-        if FLAGS.pca_preprocess_dims:
-            logging.info("Running pre-t-SNE PCA.")
-            representations = PCA(n_components=FLAGS.pca_preprocess_dims).fit_transform(
-                representations
+        if not FLAGS.checkpoint:
+            raise ValueError(
+                "If representations have not been saved already, "
+                "`checkpoint` flag must be provided."
             )
 
-        logging.info("Running t-SNE.")
-        tsne_projection = TSNE(
-            n_components=2, perplexity=FLAGS.perplexity, n_iter=FLAGS.tsne_iterations
-        ).fit_transform(representations)
-        _save_txt(tsne_projection, labels, tsne_savepath)
+        images, labels, representations = get_osm_representations(FLAGS.checkpoint)
+
+        logging.info("Writing new representations to {}".format(FLAGS.out_dir))
+        np.save(os.path.join(FLAGS.out_dir, "images.npy"), images)
+        np.save(os.path.join(FLAGS.out_dir, "labels.npy"), labels)
+        np.save(representation_savepath, representations)
+
+    logging.info("Running PCA.")
+    pca_projection = PCA(n_components=2).fit_transform(representations)
+    _save_txt(pca_projection, labels, pca_savepath)
+
+    if FLAGS.pca_preprocess_dims:
+        logging.info("Running pre-t-SNE PCA.")
+        representations = PCA(n_components=FLAGS.pca_preprocess_dims).fit_transform(
+            representations
+        )
+
+    logging.info("Running t-SNE.")
+    tsne_projection = TSNE(
+        n_components=2, perplexity=FLAGS.perplexity, n_iter=FLAGS.tsne_iterations
+    ).fit_transform(representations)
+    _save_txt(tsne_projection, labels, tsne_savepath)
 
     logging.info("Making plots")
     label_words = [OSM_CLASSES[label] for label in labels]

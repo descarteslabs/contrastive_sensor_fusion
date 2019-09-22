@@ -18,18 +18,7 @@ flags.DEFINE_integer(
     "In the distributed context, this is the global batch size.",
     lower_bound=1,
 )
-flags.DEFINE_integer(
-    "data_tilesize",
-    None,
-    "Tilesize of data used for unsupervised learning.",
-    lower_bound=1,
-)
-flags.DEFINE_string(
-    "data_feature_name",
-    None,
-    "Name of the key in the key-value dictionary containing unsupervised examples.",
-)
-flags.mark_flags_as_required(["batch_size", "data_tilesize", "data_feature_name"])
+flags.mark_flag_as_required("batch_size")
 
 # Exactly one of these must be defined
 flags.DEFINE_string(
@@ -40,6 +29,18 @@ flags.DEFINE_string(
 )
 flags.mark_flags_as_mutual_exclusive(["data_file", "data_listing"], required=True)
 
+# Flags to change if you're using a different dataset setup
+flags.DEFINE_integer(
+    "data_tilesize",
+    160,
+    "Tilesize of data used for unsupervised learning.",
+    lower_bound=1,
+)
+flags.DEFINE_string(
+    "data_feature_name",
+    "spot_naip_phr",
+    "Name of the key in the key-value dictionary containing unsupervised examples.",
+)
 
 # Optional flags to configure dataset loading
 flags.DEFINE_bool(

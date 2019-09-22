@@ -54,6 +54,7 @@ def encoder_head(
     size,
     bands=None,
     batch_size=8,
+    input_scaling=1.0,
     checkpoint=None,
     trainable=True,
     assert_checkpoint=False,
@@ -66,21 +67,23 @@ def encoder_head(
     ----------
     size : int
         Tilesize this encoder accepts.
-    bands : [string]
+    bands : [string], optional
         List of bands this encoder uses. All other bands are filled in with zeroes.
         May appear in any order, but must be a subset of FLAGS.bands. If None,
         use all available bands.
-    batch_size : int
+    batch_size : int, optional
         Batch size for the encoder.
-    checkpoint : str
+    input_scaling : float, optional
+        Number to multiply inputs by.
+        When using CSF weights, should be 1 / (1 - final dropout rate used in training).
+    checkpoint : str, optional
          - If "imagenet", the encoder is initialized with ImageNet weights and must
            have exactly 3 bands.
+         - If "random" then initialize randomly.
          - If a path to a checkpoint file (locally or in Google cloud), initialize
            from that checkpoint.
          - If a path to a directory containing checkpoint files (locally or in Google
            cloud), initialize from the latest checkpoint in that directory.
-         - Otherwise, initialize randomly, or throw an error if `assert_checkpoint`
-           is True.
     trainable : bool, optional
         If False, the encoder is frozen.
     assert_checkpoint : bool, optional
@@ -112,6 +115,9 @@ def encoder_head(
             )
         n_input_bands = 3
         encoder = resnet_encoder(3, weights="imagenet")
+    elif checkpoint == "random":
+        n_input_bands = gf.n_bands()
+        encoder = resnet_encoder(n_input_bands, weights=None)
     else:
         n_input_bands = gf.n_bands()
         encoder = resnet_encoder(n_input_bands)
@@ -149,7 +155,7 @@ def encoder_head(
     all_inputs = Concatenate(axis=-1)(to_concat)
 
     # Multiply inputs according to missing bands
-    scaled_inputs = Lambda(lambda x: x * n_input_bands / n_bands)(all_inputs)
+    scaled_inputs = Lambda(lambda x: x * input_scaling)(all_inputs)
     encoded = encoder(scaled_inputs)
 
     return model_inputs, scaled_inputs, encoded

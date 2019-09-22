@@ -4,7 +4,7 @@ Utilities for loading data relevant to experiment code.
 
 import tensorflow as tf
 
-from csf import global_flags as gf  # noqa
+from csf import global_flags as gf
 
 OSM_TILESIZE = 128
 OSM_CLASSES = [

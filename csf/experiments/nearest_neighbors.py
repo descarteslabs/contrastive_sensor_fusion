@@ -1,8 +1,9 @@
-import os.path
-import subprocess as sp
+"""
+Code to run nearest-neighbors experiments.
+"""
 
 import numpy as np
-from absl import app, flags
+from absl import flags
 from scipy.spatial import cKDTree
 from sklearn.decomposition import PCA
 
@@ -11,12 +12,6 @@ from csf.experiments.projection import get_osm_representations
 FLAGS = flags.FLAGS
 K_VALUES = [10, 25, 50, 100]
 
-flags.DEFINE_string(
-    "save_path",
-    None,
-    "Path the representations and labels are saved at. "
-    "If None (default), generate them from scratch.",
-)
 flags.DEFINE_integer(
     "pca_components",
     2048,
@@ -24,17 +19,13 @@ flags.DEFINE_integer(
 )
 
 
-def nearest_neighbor_fraction_experiment(_):
+def nearest_neighbor_fraction_experiment():
     """
     For several values of k, print what fraction of the k nearest neighbors are the same
     class.
     """
-    if FLAGS.save_path:
-        features = np.load(os.path.join(FLAGS.save_path, "representations.npy"))
-        labels = np.load(os.path.join(FLAGS.save_path, "labels.npy"))
-    else:
-        imgs, labels, features = get_osm_representations(FLAGS.checkpoint)
-        del imgs
+    imgs, labels, features = get_osm_representations(FLAGS.checkpoint)
+    del imgs
 
     pca = PCA(FLAGS.pca_components)
     features = pca.fit_transform(features)
@@ -47,7 +38,3 @@ def nearest_neighbor_fraction_experiment(_):
             np.sum(neighbor_labels == labels[..., np.newaxis]) - n_samples
         ) / k
         print("  k=%03i: frac=%f" % (k, fraction_same / n_samples))
-
-
-if __name__ == "__main__":
-    app.run(nearest_neighbor_fraction_experiment)
