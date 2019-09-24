@@ -183,7 +183,7 @@ def get_osm_representations(encoder):
         .take(n_batches)
     )
 
-    if type(encoder) == str:
+    if isinstance(encoder, str):
         logging.debug("Loading encoder.")
         encoder_inputs, _, encoder_representations = encoder_head(
             OSM_TILESIZE,
@@ -199,6 +199,9 @@ def get_osm_representations(encoder):
             outputs=[encoder_representations[FLAGS.representation_layer]],
         )
         representation_size = np.product(encoder.output.shape.as_list()[1:])
+    else:
+        raise ValueError("Encoder must be a string path to checkpoint")
+
 
     @tf.function
     def process_batch(batch):

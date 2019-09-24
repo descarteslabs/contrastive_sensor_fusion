@@ -5,6 +5,7 @@ Code to run nearest-neighbors experiments.
 import numpy as np
 from absl import flags
 from scipy.spatial import cKDTree
+from scipy.stats import mode
 from sklearn.decomposition import PCA
 
 from csf.experiments.projection import get_osm_representations
@@ -37,4 +38,7 @@ def nearest_neighbor_fraction_experiment():
         fraction_same = (
             np.sum(neighbor_labels == labels[..., np.newaxis]) - n_samples
         ) / k
-        print("  k=%03i: frac=%f" % (k, fraction_same / n_samples))
+        modal_values, counts = mode(neighbor_labels[..., 1:], axis=-1)
+        fraction_correct = np.sum((np.squeeze(modal_values) == labels).astype(np.bool))
+        print(fraction_correct, n_samples)
+        print("  k=%03i: frac=%f acc=%f" % (k, fraction_same / n_samples, fraction_correct / n_samples))
