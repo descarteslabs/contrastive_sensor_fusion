@@ -5,7 +5,7 @@ Check out our paper, "Representation Learning for Remote Sensing: An Unsupervise
 TODO(Aidan): link.
 
 # Datasets
-TODO(Xander)
+Our OSM-labeled dataset can be found at https://storage.cloud.google.com/public-published-datasets/osm_example_dataset.zip?folder=true&organizationId=272688069953
 
 # Configuration and Scripts
 Training and experiments are all handled through runnable scripts in `csf/scripts/`.
