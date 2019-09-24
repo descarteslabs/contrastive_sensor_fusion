@@ -38,7 +38,7 @@ def nearest_neighbor_fraction_experiment():
         fraction_same = (
             np.sum(neighbor_labels == labels[..., np.newaxis]) - n_samples
         ) / k
-        modal_values, counts = mode(neighbor_labels[..., 1:], axis=-1)
+        modal_values, _ = mode(neighbor_labels[..., 1:], axis=1)
         fraction_correct = np.sum((np.squeeze(modal_values) == labels).astype(np.bool))
         print(fraction_correct, n_samples)
         print(
