@@ -23,7 +23,7 @@ flags.DEFINE_integer(
 def nearest_neighbor_fraction_experiment():
     """
     For several values of k, print what fraction of the k nearest neighbors are the same
-    class.
+    class and the k-NN classification accuracy.
     """
     imgs, labels, features = get_osm_representations(FLAGS.checkpoint)
     del imgs
@@ -41,4 +41,7 @@ def nearest_neighbor_fraction_experiment():
         modal_values, counts = mode(neighbor_labels[..., 1:], axis=-1)
         fraction_correct = np.sum((np.squeeze(modal_values) == labels).astype(np.bool))
         print(fraction_correct, n_samples)
-        print("  k=%03i: frac=%f acc=%f" % (k, fraction_same / n_samples, fraction_correct / n_samples))
+        print(
+            "  k=%03i: frac=%f acc=%f"
+            % (k, fraction_same / n_samples, fraction_correct / n_samples)
+        )
