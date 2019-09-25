@@ -1,15 +1,16 @@
 # Contrastive Sensor Fusion
 Code implementing Contrastive Sensor Fusion, an approach for unsupervised learning of multi-sensor representations targeted at remote sensing imagery.
 
-Check out our paper, "Representation Learning for Remote Sensing: An Unsupervised Sensor Fusion Approach".
-TODO(Aidan): link.
+Check out our paper, ["Representation Learning for Remote Sensing: An Unsupervised Sensor Fusion Approach"](https://openreview.net/forum?id=HJx5PJxuwB).
+
+![t-SNE embedding of representations](images/osm_tsne.png)
 
 # Datasets
 Our OSM-labeled dataset can be found at https://storage.cloud.google.com/public-published-datasets/osm_example_dataset.zip?folder=true&organizationId=272688069953
 
 # Configuration and Scripts
 Training and experiments are all handled through runnable scripts in `csf/scripts/`.
-To see the full configuration a script accepts, run `python3 csf/scripts/some_script.py --helpfull`. 
+To see the full configuration a script accepts, run `python3 csf/scripts/some_script.py --helpfull`.
 To pass a set of configuration defined in a file, run `python3 csf/scripts/scripy.py --flagfile=csf/parameters/some_config_file.cfg`.
 
 We handle configuration and flags with [abseil](https://github.com/abseil/abseil-py).
