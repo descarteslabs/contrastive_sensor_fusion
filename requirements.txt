@@ -3,4 +3,4 @@ pillow
 scipy
 seaborn
 sklearn
-tensorflow-gpu==2.0.0-rc1
+tensorflow-gpu==2.9.3
